@@ -120,7 +120,7 @@
       </div>
       <div class="draw">
         <div class="stat"><span>Eligibility</span><span id="eligibility">Chances</span></div>
-        <div class="stat"><span>Remaining chances (this wallet)</span><span id="remaining">–</span></div>
+        <div class="stat"><span>Remaining free (this wallet)</span><span id="remaining">–</span></div>
         <div class="draw-actions">
           <button id="drawBtn" class="btn" disabled title="Disabled until wallet connects">Draw Now</button>
           <button id="resetBtn" class="btn" title="Local cache only">Reset (local)</button>
@@ -297,6 +297,7 @@
       try{ await setDoc(partDoc(address),{ address:String(address).toLowerCase(), isHolder, used, allowed:allowedChancesLocal(isHolder,cfg), lastPrize, updatedAt:serverTimestamp(), walletType },{merge:true}); }
       catch(e){ console.warn('writeUsedFS warn:', e); }
     }
+
     async function computeRemaining(address,isHolder,cfg){
       try{
         const usedFS=await readUsedFS(address);
@@ -306,12 +307,14 @@
         const allowed = allowedChancesLocal(isHolder,cfg);
         const rem = Math.max(0, allowed - used);
         console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
-        return rem;
-      }catch(e){ console.warn('computeRemaining failed:', e); return 0; }
+        return { freeLeft: rem, usedSoFar: used, allowed };
+      }catch(e){ console.warn('computeRemaining failed:', e); return { freeLeft:0, usedSoFar:0, allowed:0 }; }
     }
+
     async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
       els.walletLabel.textContent = walletAddress ? `${short(walletAddress)}${walletType?' · '+walletType:''}` : 'Not connected';
       els.disconnectBtn.style.display = walletAddress ? 'inline-flex' : 'none';
+
       if (!walletAddress){
         els.remaining.textContent='–';
         els.drawBtn.disabled=true;
@@ -319,11 +322,17 @@
         els.eligibility.textContent='Chances: –';
         return;
       }
-      const rem = await computeRemaining(walletAddress,isHolder,cfg);
-      els.remaining.textContent = String(rem);
-      els.drawBtn.disabled = rem<=0;
-      els.drawBtn.title = rem<=0 ? 'Disabled: no chances left' : '';
-      els.eligibility.textContent = `Chances: ${rem}`;
+
+      const { freeLeft } = await computeRemaining(walletAddress,isHolder,cfg);
+      els.remaining.textContent = String(freeLeft);
+
+      // ✅ 免费用尽后仍允许点击，进入付费抽
+      els.drawBtn.disabled = false;
+      els.drawBtn.title = freeLeft<=0
+        ? `No free chances · Paid draw costs ${PRICE_UI.toLocaleString()} tokens`
+        : 'Free draw available';
+
+      els.eligibility.textContent = `Free chances left: ${freeLeft}`;
       const hasMint = Array.isArray(CHAIN.mints)&&CHAIN.mints[0]?.address; els.holderNote.style.display = hasMint?'none':'block';
     }
 
@@ -473,7 +482,6 @@
         const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
         if(!pk) throw new Error('No publicKey from wallet');
 
-        // ✅ 关键修复：正确判断 toBase58
         const address =
           (pk && typeof pk.toBase58 === 'function') ? pk.toBase58() :
           (typeof pk === 'string') ? pk : String(pk);
@@ -501,30 +509,59 @@
       await updateUI(false, CONFIG_DEFAULT);
     });
 
-    /* ===== 后端 /config 覆盖链参数 ===== */
+    /* ===== 后端配置加载（支持 /status 与 /config） ===== */
     function pickFrontendRpc(url){
       if (!url) return 'https://solana.publicnode.com';
       return url;
     }
     async function loadServerChain(){
       try{
-        const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
-        if(!r.ok) throw new Error(`/config ${r.status}`);
-        const j=await r.json();
+        // ① /status 优先
+        try{
+          const r1 = await fetch(`${API_BASE}/status`,{headers:{'Accept':'application/json'}, cache:'no-store'});
+          if (r1.ok){
+            const s = await r1.json();
+            if (s?.mint) CHAIN.mints[0].address = s.mint;
+            if (typeof s?.decimals === 'number') CHAIN.decimals = s.decimals;
+            if (s?.treasury) CHAIN.treasury = s.treasury;
+            if (s?.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(s.rpc);
+            if (typeof s?.costUi === 'number') PRICE_UI = s.costUi;
+          }
+        }catch{}
 
-        if (j.mint) CHAIN.mints[0].address = j.mint;
-        if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
-        if (j.treasury) CHAIN.treasury = j.treasury;
-        if (j.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
-        if (j.price) PRICE_UI = Number(j.price);
+        // ② /config 兜底（有的后端是包在 config 里）
+        try{
+          const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
+          if (r.ok){
+            const j=await r.json();
+            const c = j?.config || j;
+            if (c?.mint) CHAIN.mints[0].address = c.mint;
+            if (typeof c?.decimals === 'number') CHAIN.decimals = c.decimals;
+            if (typeof c?.mintDecimals === 'number') CHAIN.decimals = c.mintDecimals; // 兼容字段
+            if (c?.treasury) CHAIN.treasury = c.treasury;
+            if (c?.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(c.rpc);
+            if (typeof c?.price === 'number') PRICE_UI = c.price;
+            if (typeof c?.drawCostUi === 'number') PRICE_UI = c.drawCostUi; // 兼容字段
+          }
+        }catch{}
 
-        console.log('[config]', j);
+        // UI 提示
         if (!CHAIN.mints[0].address || !CHAIN.treasury){
-          showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
+          showBootError('Backend not fully configured: missing mint or treasury. Free draw only.');
         }
+        const costNode = document.getElementById('costPerDraw');
+        if (costNode) costNode.textContent = `${PRICE_UI.toLocaleString()} tokens`;
+
+        console.log('[chain]', {
+          rpc: CHAIN.rpcEndpoint,
+          mint: CHAIN.mints[0].address,
+          decimals: CHAIN.decimals,
+          treasury: CHAIN.treasury,
+          price: PRICE_UI
+        });
       }catch(e){
         console.warn('loadServerChain warn:', e);
-        showBootError('Failed to load /config from backend. You can still do free first draw after connecting a wallet.');
+        showBootError('Failed to load backend config. You can still do the free first draw after connecting a wallet.');
       }
     }
 
@@ -577,6 +614,7 @@
       const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
 
+      // 尝试直接走钱包（部分钱包会自动补 blockhash）
       if (typeof provider.signAndSendTransaction === 'function'){
         try {
           const sig = await signAndSendViaWallet(tx);
@@ -587,6 +625,7 @@
         }
       }
 
+      // 我们补 blockhash & feePayer，再次尝试
       const rpclist = buildRpcList(CHAIN.rpcEndpoint);
       let lastErr = null;
 
@@ -627,11 +666,14 @@
       const cfg = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
       const isSol = isSolanaAddress(walletAddress);
       const isHolder = isSol ? await safeResolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
-      const rem = await computeRemaining(walletAddress,isHolder,cfg);
-      if(rem<=0){ els.result.textContent='No chances left.'; return; }
 
-      const usedSoFar = Math.max(readUsedLocal(walletAddress), await readUsedFS(walletAddress));
-      const needPay = usedSoFar >= 1;
+      const remInfo = await computeRemaining(walletAddress,isHolder,cfg);
+      const freeLeft = remInfo.freeLeft;
+      const usedSoFar = remInfo.usedSoFar;
+      const allowedFree = remInfo.allowed;
+
+      // 关键：免费用尽后不 return，而是进入付费逻辑
+      const needPay = freeLeft <= 0;
 
       if (needPay){
         if (!isSol) { els.result.textContent='Please connect a Solana wallet for paid draws.'; return; }
@@ -641,12 +683,14 @@
         }
         if (!CHAIN.mints?.[0]?.address || !CHAIN.treasury){
           els.result.textContent='Payment not configured. Please try again later.';
-          console.warn('Missing mint/treasury from backend /config');
+          console.warn('Missing mint/treasury from backend /config or /status');
           return;
         }
       }
 
-      els.drawBtn.disabled=true; els.result.textContent= needPay ? `Paying ${PRICE_UI.toLocaleString()}… ⏳` : 'Drawing… ✨';
+      els.drawBtn.disabled=true;
+      els.result.textContent= needPay ? `Paying ${PRICE_UI.toLocaleString()}… ⏳` : 'Drawing… ✨';
+
       try{
         let paySig = null;
 
@@ -674,6 +718,9 @@
         const prize = data.prize?.label || 'Prize';
         els.result.textContent = `You got: ${prize} ✨`;
 
+        // 计算这次“使用次数”应如何增加：
+        // - 如果本次是免费抽：usedNow = usedSoFar + 1
+        // - 如果本次是付费抽：免费次已用尽，但为了不再阻止下一次付费抽，我们也把 used 加 1（只要后端按 paySig 记账即可）
         const usedNow = usedSoFar + 1;
         writeUsedLocal(walletAddress, usedNow);
         await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
@@ -686,6 +733,7 @@
         await updateUI(isHolder2, cfg2);
       }
     }
+
     async function resetLocal(){
       if(walletAddress){
         writeUsedLocal(walletAddress,0);
@@ -713,7 +761,14 @@
     async function fetchLatestWinners(){
       try{
         const r=await fetch(`${API_BASE}/draws/latest?limit=5`,{headers:{'Accept':'application/json'}});
-        if(r.ok){ const j=await r.json(); if(j?.ok && Array.isArray(j.draws)){ const a=j.draws.map(x=>({address:x.wallet||x.address, prizeLabel:x.prizeLabel||(x.prize&&x.prize.label), type:(x.type||'').toUpperCase()})).filter(it=>it.type && it.type!=='NONE'); if(a.length) return a.slice(0,5); } }
+        if(r.ok){
+          const j=await r.json();
+          if(j?.ok && Array.isArray(j.draws)){
+            const a=j.draws.map(x=>({address:x.wallet||x.address, prizeLabel:x.prizeLabel||(x.prize&&x.prize.label), type:(x.type||'').toUpperCase()}))
+                           .filter(it=>it.type && it.type!=='NONE');
+            if(a.length) return a.slice(0,5);
+          }
+        }
       }catch(_){}
       try{
         const drawsColl = collection(db,'activities',ACTIVITY_ID,'draws');
@@ -726,7 +781,13 @@
     function renderWinners(list){
       const box=els.winnersList;
       if(!Array.isArray(list)||!list.length){ box.innerHTML='<div class="fine">No winners yet.</div>'; return; }
-      box.innerHTML=''; list.forEach(w=>{ const li=document.createElement('div'); li.className='winner-item'; li.innerHTML=`<span class="addr">${tail(w.address||'',4)}</span><span class="prize">${w.prizeLabel||'Prize'}</span>`; box.appendChild(li); });
+      box.innerHTML='';
+      list.forEach(w=>{
+        const li=document.createElement('div');
+        li.className='winner-item';
+        li.innerHTML=`<span class="addr">${tail(w.address||'',4)}</span><span class="prize">${w.prizeLabel||'Prize'}</span>`;
+        box.appendChild(li);
+      });
     }
     async function updateWinnersUI(){ els.winnersList.innerHTML='<div class="fine">Loading…</div>'; const list=await fetchLatestWinners(); renderWinners(list||[]); }
 
