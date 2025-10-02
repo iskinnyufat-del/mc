@@ -9,7 +9,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
-  <!-- Firebase config -->
   <script>
     window.FIREBASE_CONFIG = {
       apiKey: "AIzaSyD7xOnDHnJdG5p0BoL4UR6gSohuL8a0ncE",
@@ -20,10 +19,9 @@
       appId: "1:483605028839:web:89804c881f445137536742",
       measurementId: "G-29ZD4V0DDJ"
     };
-    // 可选: 在外层注入 window.API_BASE 覆盖后端域名
+    // 可选: 外层可设置 window.API_BASE 覆盖后端域名
   </script>
 
-  <!-- solana web3 IIFE -->
   <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 
   <style>
@@ -102,7 +100,6 @@
       A tiny lucky page for Solana friends • Holders get more chances 🍀
     </p>
 
-    <!-- About -->
     <section class="section card" id="about">
       <h2>About the Project</h2>
       <div class="about-list">
@@ -112,7 +109,6 @@
       </div>
     </section>
 
-    <!-- Draw -->
     <section class="section card" id="draw">
       <div class="draw-title">
         <img src="./assets/happy.png" alt="draw icon" class="draw-icon">
@@ -130,7 +126,6 @@
       </div>
     </section>
 
-    <!-- Odds -->
     <section class="section card" id="draw-info">
       <h2>How it works</h2>
       <div class="tips">
@@ -149,14 +144,12 @@
       <p class="fine" style="margin-top:8px;">* UI shows promo odds; real odds are server-side and may adjust dynamically.</p>
     </section>
 
-    <!-- Latest winners -->
     <section class="section card" id="latest-winners">
       <h2>Latest Winners (last 5)</h2>
       <div id="winnersList" class="winners"><div class="fine">Loading…</div></div>
       <p class="fine">Only shows wallet tail & prize for privacy.</p>
     </section>
 
-    <!-- Global counter -->
     <section class="section card" id="moonglow-global">
       <h2>🌕 MOONGlow Points (Global)</h2>
       <p class="note">Every visit adds a little more MOONlight — this number is shared by everyone ✨</p>
@@ -170,37 +163,15 @@
     </p>
   </div>
 
-  <!-- Wallet modal -->
-  <div id="walletModal" class="modal" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-        <h2 id="modalTitle" style="margin:0;">Select a Wallet</h2>
-        <button id="refreshWalletsBtn" class="btn btn-ghost">Refresh</button>
-      </div>
-      <div id="envWarn" class="help"></div>
-      <div id="walletList" class="wallet-list" style="margin-top:6px;"></div>
-      <div class="help">
-        Tip: If MetaMask is installed but shows EVM only, open <b>MetaMask → Settings → Experimental → Enable Solana</b> (or allow the Solana Snap) and return here, then click Refresh.
-      </div>
-      <button id="closeModalBtn" class="btn" style="width:100%; margin-top:12px">Cancel</button>
-    </div>
-  </div>
-
-  <!-- Display-only config -->
-  <script id="displayConfig" type="application/json">
-  {"pricing":{"firstFree":true,"costPerDrawUi":10000},"burn":{"everyDraws":100,"burnAmountUi":100000}}
-  </script>
-
-  <!-- Main script -->
+  <!-- 单一模块脚本（不要再分成两个） -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
     import { getFirestore, doc, getDoc, setDoc, increment, serverTimestamp,
              collection, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js";
+    import { loadRemoteConfig, resolveIsHolder, allowedChances } from "./holder-check.js";
 
-    /* ===== Backend API ===== */
     const API_BASE = (window.API_BASE && String(window.API_BASE)) || "https://mooncake-1.onrender.com";
 
-    /* ===== UI refs ===== */
     const bootErr = document.getElementById('bootError');
     const els = {
       connectBtn: document.getElementById('connectBtn'),
@@ -219,11 +190,11 @@
       walletList: document.getElementById('walletList'),
       closeModalBtn: document.getElementById('closeModalBtn'),
       envWarn: document.getElementById('envWarn'),
-      refreshWalletsBtn: document.getElementById('refreshWalletsBtn')
+      refreshWalletsBtn: document.getElementById('refreshWalletsBtn'),
+      costPerDraw: document.getElementById('costPerDraw')
     };
     function showBootError(msg){ bootErr.style.display='block'; bootErr.textContent=msg; console.error('[BOOT]', msg); }
 
-    /* ===== Activity & chain ===== */
     const ACTIVITY_ID = 'mid-autumn-2025';
     const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
     const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -241,15 +212,9 @@
     const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
     let PRICE_UI = 10000;
 
-    /* ===== Firebase ===== */
-    const app = initializeApp(window.FIREBASE_C OFIG);
+    const app = initializeApp(window.FIREBASE_CONFIG);
     const db  = getFirestore(app);
-  </script>
-  <script type="module">
-    /* ===== holder-check ===== */
-    import { loadRemoteConfig, resolveIsHolder, allowedChances } from './holder-check.js';
 
-    /* ===== State & helpers ===== */
     let walletAddress = null;
     let walletType = null;
     let currentProvider = null;
@@ -287,14 +252,10 @@
         if (used>usedFS) await writeUsedFS(address,used,null,isHolder,cfg);
         const allowed = allowedChancesLocal(isHolder,cfg);
         const rem = Math.max(0, allowed - used);
-        console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
         return rem;
       }catch(e){
-        // ⭐ 关键修复：Firestore 不可读时不要禁用按钮，按本地缓存计算
-        console.warn('computeRemaining failed (fallback to local only):', e);
-        const allowed = allowedChancesLocal(isHolder,cfg);
-        const usedLocal=readUsedLocal(address);
-        return Math.max(0, allowed - usedLocal);
+        console.warn('computeRemaining failed:', e);
+        return 1; // 兜底：至少允许首抽，避免按钮被永久禁用
       }
     }
     async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
@@ -315,7 +276,6 @@
       const hasMint = Array.isArray(CHAIN.mints)&&CHAIN.mints[0]?.address; els.holderNote.style.display = hasMint?'none':'block';
     }
 
-    /* ===== 环境提示 ===== */
     function envCheck(){
       const tips=[];
       const httpsOk = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
@@ -324,7 +284,6 @@
       return tips.join(' ');
     }
 
-    /* ===== 钱包检测（略） ===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
@@ -482,59 +441,42 @@
       }
     }
 
-    /* ===== Disconnect ===== */
     els.disconnectBtn.addEventListener('click', async ()=>{
       walletAddress=null; walletType=null; currentProvider=null;
       await updateUI(false, CONFIG_DEFAULT);
     });
 
-    /* ===== 后端 /config 覆盖链参数（兼容多种返回） ===== */
     function pickFrontendRpc(url){
       if (!url) return 'https://solana.publicnode.com';
       return url;
     }
+
+    // 同时读取 "/"（拿 treasury、rpc）与 "/config"（拿 mint、decimals、cost）
     async function loadServerChain(){
-      const applyCfg = (cfg) => {
-        if (!cfg) return;
-        if (cfg.mint) CHAIN.mints[0].address = cfg.mint;
-        if (typeof cfg.decimals === 'number') CHAIN.decimals = cfg.decimals;
-        if (typeof cfg.mintDecimals === 'number') CHAIN.decimals = cfg.mintDecimals;
-        if (cfg.treasury) CHAIN.treasury = cfg.treasury;
-        if (cfg.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(cfg.rpc);
-        if (typeof cfg.price === 'number') PRICE_UI = cfg.price;
-        if (typeof cfg.costUi === 'number') PRICE_UI = cfg.costUi;
-        if (typeof cfg.drawCostUi === 'number') PRICE_UI = cfg.drawCostUi;
-      };
+      let base=null, cfg=null;
+      try {
+        const r1 = await fetch(`${API_BASE}/`, { headers:{Accept:'application/json'}, cache:'no-store' });
+        base = r1.ok ? await r1.json() : null;
+      } catch {}
+      try {
+        const r2 = await fetch(`${API_BASE}/config`, { headers:{Accept:'application/json'}, cache:'no-store' });
+        const j2 = r2.ok ? await r2.json() : null;
+        cfg = j2?.config || null;
+      } catch {}
 
-      try{
-        // 1) 优先 /config
-        const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
-        if(r.ok){
-          const j=await r.json();
-          applyCfg(j?.config || j);
-        } else {
-          throw new Error(`/config ${r.status}`);
-        }
-      }catch(e){
-        console.warn('loadServerChain /config warn:', e);
-        // 2) 退回 /status 或 /
-        try{
-          const r2 = await fetch(`${API_BASE}/status`, {headers:{'Accept':'application/json'}, cache:'no-store'});
-          if (r2.ok){ applyCfg(await r2.json()); }
-          else {
-            const r3 = await fetch(`${API_BASE}/`, {headers:{'Accept':'application/json'}, cache:'no-store'});
-            if (r3.ok){ applyCfg(await r3.json()); }
-          }
-        }catch(e2){ console.warn('loadServerChain fallback warn:', e2); }
-      }
+      if (cfg?.mint) CHAIN.mints[0].address = cfg.mint;
+      if (typeof cfg?.mintDecimals === 'number') CHAIN.decimals = cfg.mintDecimals;
+      if (base?.treasury) CHAIN.treasury = base.treasury;
+      if (base?.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(base.rpc);
+      if (typeof cfg?.drawCostUi === 'number') PRICE_UI = cfg.drawCostUi;
 
-      console.log('[config-applied]', {CHAIN, PRICE_UI});
+      if (els.costPerDraw) els.costPerDraw.textContent = `${Number(PRICE_UI).toLocaleString()} tokens`;
+
       if (!CHAIN.mints[0].address || !CHAIN.treasury){
-        showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
+        showBootError('Payment not configured on backend: missing mint or treasury. First draw is free; paid draws disabled.');
       }
     }
 
-    /* ===== RPC 工具 ===== */
     const PUBLIC_RPCS = [
       'https://solana.publicnode.com',
       'https://solana-rpc.publicnode.com',
@@ -549,7 +491,6 @@
     function isApiKeyErr(err){ const s=String(err?.message||err||''); return /-32052|api key|forbidden|403/i.test(s); }
     function withTimeout(p,ms=2500){ return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('rpc-timeout')),ms))]); }
 
-    /* ===== SPL Transfer Helpers ===== */
     function u64LE(nBig){ const b = new Uint8Array(8); let x = BigInt(nBig); for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; } return b; }
     function deriveATA(ownerPk, mintPk){
       return PublicKey.findProgramAddressSync([ ownerPk.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPk.toBuffer() ], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
@@ -626,18 +567,6 @@
       throw lastErr || new Error('all rpc failed');
     }
 
-    /* ===== DRAW（含扣款） ===== */
-    async function safeResolveIsHolder({ db, address, chainConfig, config, timeoutMs = 2000 }) {
-      const isSol = typeof address === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) && !address.startsWith('0x');
-      if (!isSol) return false;
-      try {
-        return await Promise.race([
-          resolveIsHolder({ db, address, chainConfig, config }),
-          new Promise((_, rej)=> setTimeout(()=> rej(new Error('holder-check-timeout')), timeoutMs))
-        ]).catch(()=> false);
-      } catch { return false; }
-    }
-
     async function performDraw(){
       if(!walletAddress) return;
 
@@ -663,7 +592,7 @@
         }
       }
 
-      els.drawBtn.disabled=true; els.result.textContent= needPay ? `Paying ${PRICE_UI.toLocaleString()}… ⏳` : 'Drawing… ✨';
+      els.drawBtn.disabled=true; els.result.textContent= needPay ? `Paying ${Number(PRICE_UI).toLocaleString()}… ⏳` : 'Drawing… ✨';
       try{
         let paySig = null;
 
@@ -715,7 +644,6 @@
     els.drawBtn.addEventListener('click', performDraw);
     els.resetBtn.addEventListener('click', resetLocal);
 
-    /* ===== MOONGlow ===== */
     const glowRef = doc(db, 'stats', 'moonglow');
     async function ensureGlow(){ const s=await getDoc(glowRef); if(!s.exists()){ await setDoc(glowRef,{ total:0, updatedAt:serverTimestamp() },{merge:true}); } }
     async function incGlowOnce(){ await setDoc(glowRef,{ total:increment(1), updatedAt:serverTimestamp() },{merge:true}); }
@@ -726,7 +654,6 @@
       catch(e){ console.error('[MOONGlow] failed:', e); els.glowGlobal.textContent='—'; els.glowError.textContent='Global counter failed.'; }
     }
 
-    /* ===== Winners ===== */
     async function fetchLatestWinners(){
       try{
         const r=await fetch(`${API_BASE}/draws/latest?limit=5`,{headers:{'Accept':'application/json'}});
@@ -747,7 +674,6 @@
     }
     async function updateWinnersUI(){ els.winnersList.innerHTML='<div class="fine">Loading…</div>'; const list=await fetchLatestWinners(); renderWinners(list||[]); }
 
-    /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
     await loadServerChain();
     await updateGlowUIWithRetry();
@@ -756,7 +682,6 @@
   </script>
 </body>
 </html>
-
 
 
 
