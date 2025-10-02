@@ -1,50 +1,59 @@
 // holder-check.js
-// 作用：统一“是否持币 + 次数配置”
-// - 发币前：用 Firestore 的 config/draw（和可选的 whitelist/{address}）决定
-// - 发币后：优先走链上余额（根据前端传入的 CHAIN 配置）
-// 加强版：多 RPC 回退 + 超时保护；403/-32052 自动切换公共 RPC；记住上次可用 RPC；
-//        至少用 2 个“健康 RPC”再判定不是持币者，降低误判。
+// 统一“是否持币 + 次数配置”
+// - 发币前：Firestore 的 config/draw + 可选 whitelist/{address}
+// - 发币后：优先链上余额（根据前端传入的 CHAIN.mints）
+// 加强点：多 RPC 回退、2.5s 超时、403/-32052 自动切换、记住上次可用 RPC
 
-/* =========================
- * 远程配置：config/draw
- * ========================= */
+/* ========== 远程配置：config/draw ========== */
 export async function loadRemoteConfig(db, { defaults } = {}) {
   const fallback = defaults || {
     forceAllAsHolder: false,
     holderChances: 3,
-    nonHolderChances: 1
+    nonHolderChances: 1,
   };
   try {
-    const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js");
-    const ref = doc(db, 'config', 'draw');
+    const { doc, getDoc } = await import(
+      "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js"
+    );
+    const ref = doc(db, "config", "draw");
     const snap = await getDoc(ref);
     if (!snap.exists()) return { ...fallback };
     const d = snap.data() || {};
     return {
-      forceAllAsHolder: typeof d.forceAllAsHolder === 'boolean' ? d.forceAllAsHolder : fallback.forceAllAsHolder,
-      holderChances: typeof d.holderChances === 'number' ? d.holderChances : fallback.holderChances,
-      nonHolderChances: typeof d.nonHolderChances === 'number' ? d.nonHolderChances : fallback.nonHolderChances,
+      forceAllAsHolder:
+        typeof d.forceAllAsHolder === "boolean"
+          ? d.forceAllAsHolder
+          : fallback.forceAllAsHolder,
+      holderChances:
+        typeof d.holderChances === "number"
+          ? d.holderChances
+          : fallback.holderChances,
+      nonHolderChances:
+        typeof d.nonHolderChances === "number"
+          ? d.nonHolderChances
+          : fallback.nonHolderChances,
     };
   } catch (e) {
-    console.warn('[holder-check] loadRemoteConfig failed, use defaults:', e);
+    console.warn("[holder-check] loadRemoteConfig failed, use defaults:", e);
     return { ...fallback };
   }
 }
 
-/* =========================
- * 可选白名单：whitelist/{wallet}
- * ========================= */
+/* ========== 可选白名单：whitelist/{wallet} ========== */
 async function isWhitelisted(db, address) {
   try {
-    const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js");
-    // 先查原地址，再查小写（兼容你可能存了小写）
-    const ref = doc(db, 'whitelist', address);
+    const { doc, getDoc } = await import(
+      "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js"
+    );
+
+    // 先查原值，再查小写（兼容你可能写小写）
+    const ref = doc(db, "whitelist", address);
     const snap = await getDoc(ref);
     if (snap.exists() && snap.data()?.holder === true) return true;
 
-    const low = String(address || '').toLowerCase();
+    const low = String(address || "").toLowerCase();
     if (low !== address) {
-      const ref2 = doc(db, 'whitelist', low);
+      const ref2 = doc(db, "whitelist", low);
       const snap2 = await getDoc(ref2);
       if (snap2.exists() && snap2.data()?.holder === true) return true;
     }
@@ -54,70 +63,77 @@ async function isWhitelisted(db, address) {
   }
 }
 
-/* =========================
- * 工具：RPC 选择与超时保护
- * ========================= */
+/* ========== 工具：RPC & 超时 ========== */
 function dedupe(arr) {
-  const seen = new Set(); const out = [];
-  for (const x of arr) { const k = (x || '').trim(); if (k && !seen.has(k)) { seen.add(k); out.push(k); } }
+  const seen = new Set();
+  const out = [];
+  for (const x of arr || []) {
+    const k = (x || "").trim();
+    if (k && !seen.has(k)) {
+      seen.add(k);
+      out.push(k);
+    }
+  }
   return out;
 }
 
 function isApiKeyError(e) {
-  const msg = String(e?.message || e || '');
-  // Helius/Alchemy 等会返回 -32052 或 403/forbidden
+  const msg = String(e?.message || e || "");
+  // 403/forbidden 或 -32052（无/错 key）
   return /-32052|api key|apikey|forbidden|403/i.test(msg);
 }
 
 function withTimeout(promise, ms = 2500) {
   return Promise.race([
     promise,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('rpc-timeout')), ms))
+    new Promise((_, rej) => setTimeout(() => rej(new Error("rpc-timeout")), ms)),
   ]);
 }
 
-/** 从 chainConfig 构造“前端可用”的 RPC 列表，并把上次成功的 RPC 放到最前 */
+/** 从 chainConfig 构造 RPC 列表，并把上次成功的 RPC 放前面 */
 function buildRpcList(chainConfig) {
-  const cluster = (chainConfig?.cluster || 'mainnet-beta').trim();
-  const primaryA = (chainConfig?.rpc || '').trim();
-  const primaryB = (chainConfig?.rpcEndpoint || '').trim();
-  const extras = Array.isArray(chainConfig?.extraRpcs) ? chainConfig.extraRpcs.map(String) : [];
+  const cluster = (chainConfig?.cluster || "mainnet-beta").trim();
+  const primaryA = (chainConfig?.rpc || "").trim();
+  const primaryB = (chainConfig?.rpcEndpoint || "").trim();
+  const extras = Array.isArray(chainConfig?.extraRpcs)
+    ? chainConfig.extraRpcs.map(String)
+    : [];
 
   const LS_KEY = `holdercheck:lastGoodRpc:${cluster}`;
-  let lastGood = '';
-  try { lastGood = localStorage.getItem(LS_KEY) || ''; } catch {}
+  let lastGood = "";
+  try {
+    lastGood = localStorage.getItem(LS_KEY) || "";
+  } catch {}
 
-  // 公共回退优先 publicnode，Ankr 次之；官方 RPC 放最后（前端直连易限流）
+  // 公共回退优先 publicnode，官方放最后（前端直连常见限流/CORS）
   const publicFallbacks = [
-    'https://solana.publicnode.com',
-    'https://solana-rpc.publicnode.com',
-    'https://rpc.ankr.com/solana',
+    "https://solana.publicnode.com",
+    "https://solana-rpc.publicnode.com",
+    "https://rpc.ankr.com/solana",
+    "https://api.mainnet-beta.solana.com",
   ];
 
-  const list = dedupe([
-    lastGood,
-    primaryA || primaryB,
-    ...extras,
-    ...publicFallbacks,
-    'https://api.mainnet-beta.solana.com',
-  ]).filter(Boolean);
-
-  return list.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u));
+  const list = dedupe([lastGood, primaryA || primaryB, ...extras, ...publicFallbacks]);
+  return list.filter((u) => typeof u === "string" && /^https?:\/\//i.test(u));
 }
 
 function rememberGoodRpc(cluster, rpc) {
-  try { localStorage.setItem(`holdercheck:lastGoodRpc:${cluster}`, String(rpc || '')); } catch {}
+  try {
+    localStorage.setItem(
+      `holdercheck:lastGoodRpc:${cluster}`,
+      String(rpc || "")
+    );
+  } catch {}
 }
 
-/* =========================
- * 链上余额检查：任一 mint 满足阈值即算 holder
- * ========================= */
+/* ========== 链上余额检查：任一 mint 达阈值即算 holder ========== */
 async function checkAnyMintHold({ owner, chainConfig }) {
-  const { commitment = 'confirmed', mints = [], cluster = 'mainnet-beta' } = chainConfig || {};
+  const { commitment = "confirmed", mints = [], cluster = "mainnet-beta" } =
+    chainConfig || {};
   if (!Array.isArray(mints) || mints.length === 0) return null;
 
-  if (typeof window === 'undefined' || !window.solanaWeb3) {
-    console.warn('[holder-check] solanaWeb3 not present, skip on-chain');
+  if (typeof window === "undefined" || !window.solanaWeb3) {
+    console.warn("[holder-check] solanaWeb3 not present, skip on-chain");
     return null;
   }
 
@@ -126,30 +142,27 @@ async function checkAnyMintHold({ owner, chainConfig }) {
 
   const endpoints = buildRpcList(chainConfig);
   let lastErr = null;
-  let sawAnyHealthyRpc = false;
-  let healthyRpcCountTried = 0;
 
   for (const rpc of endpoints) {
     try {
       const connection = new Connection(rpc, commitment);
 
-      // 逐个 mint 检查余额（每次 2.5s 超时保护）
+      // 逐个 mint 检查余额（每次 2.5s 超时）
       for (const mint of mints) {
         if (!mint?.address) continue;
         const mintPk = new PublicKey(mint.address);
 
         // 重要：getParsedTokenAccountsByOwner 的 filter 只能二选一，这里只用 mint 过滤
         const resp = await withTimeout(
-          connection.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }),
+          connection.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, commitment),
           2500
         );
 
-        // 只要能拿到 resp 就算健康 RPC
-        sawAnyHealthyRpc = true;
-
         let total = 0;
-        for (const { account } of resp.value) {
-          const ui = Number(account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0);
+        for (const { account } of resp.value || []) {
+          const ui = Number(
+            account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0
+          );
           total += ui;
         }
         const threshold = Number(mint.minHoldUiAmount ?? 1e-9);
@@ -158,17 +171,11 @@ async function checkAnyMintHold({ owner, chainConfig }) {
           return { ok: true, mint: mint.address, amount: total, rpcUsed: rpc };
         }
       }
-
-      // 这个 RPC 正常但没查到余额：先记健康次数，至少试 2 个健康 RPC 再下结论
+      // 该 RPC 正常返回但没命中任何 mint → 非持有者（也记住这个可用 RPC）
       rememberGoodRpc(cluster, rpc);
-      healthyRpcCountTried += 1;
-      if (healthyRpcCountTried >= 2) {
-        return { ok: false, rpcUsed: rpc };
-      }
-      // 否则继续试下一个 RPC
+      return { ok: false, rpcUsed: rpc };
     } catch (e) {
       lastErr = e;
-      // 典型 403/-32052：继续尝试下一条
       if (isApiKeyError(e)) {
         console.warn(`[holder-check] RPC forbidden/needs key, switch: ${rpc}`, e);
         continue;
@@ -178,29 +185,31 @@ async function checkAnyMintHold({ owner, chainConfig }) {
     }
   }
 
-  // 所有 RPC 都失败了（或没有健康 RPC）
-  if (!sawAnyHealthyRpc && lastErr) {
-    console.warn('[holder-check] all RPC failed, fallback to config/whitelist:', lastErr);
+  if (lastErr) {
+    console.warn("[holder-check] all RPC failed, fallback to config/whitelist:", lastErr);
   }
-  return null;
+  return null; // 表示链上全失败，交给 fallback
 }
 
-/* =========================
- * 统一是否持币接口（暴露给前端）
- * ========================= */
+/* ========== 统一是否持币接口（暴露给前端） ========== */
 export async function resolveIsHolder({ db, address, chainConfig, config }) {
-  const addr = String(address || '');
-  const isSol = !!addr && !addr.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+  const addr = String(address || "");
+  const isSol =
+    !!addr && !addr.startsWith("0x") && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
 
-  // 发币后优先走链上
-  const hasMintConfigured = isSol && Array.isArray(chainConfig?.mints) && chainConfig.mints.some(m => !!m?.address);
+  // 发币后优先链上
+  const hasMintConfigured =
+    isSol &&
+    Array.isArray(chainConfig?.mints) &&
+    chainConfig.mints.some((m) => !!m?.address);
+
   if (hasMintConfigured) {
     try {
       const r = await checkAnyMintHold({ owner: addr, chainConfig });
-      if (r && typeof r.ok === 'boolean') return r.ok; // true/false 均可直接返回
-      // r === null 表示所有 RPC 都失败 → 走 fallback
+      if (r && typeof r.ok === "boolean") return r.ok; // true/false 都直接返回
+      // null 表示所有 RPC 都失败 → 走 fallback
     } catch (e) {
-      console.warn('[holder-check] on-chain failed, fallback to config/whitelist:', e);
+      console.warn("[holder-check] on-chain failed, fallback to config/whitelist:", e);
     }
   }
 
@@ -209,13 +218,12 @@ export async function resolveIsHolder({ db, address, chainConfig, config }) {
   return await isWhitelisted(db, addr);
 }
 
-/* =========================
- * 次数计算（暴露给前端）
- * ========================= */
+/* ========== 次数计算（暴露给前端） ========== */
 export function allowedChances(isHolder, config) {
   const h = Number(config?.holderChances ?? 3);
   const n = Number(config?.nonHolderChances ?? 1);
   return isHolder ? h : n;
 }
+
 
 
