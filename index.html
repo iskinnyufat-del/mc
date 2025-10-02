@@ -447,7 +447,6 @@
             btn.innerHTML = `<span>🦊</span><span>${def.label}</span><span class="badge">Not installed</span>`;
             btn.addEventListener('click', ()=> window.open(def.install,'_blank'));
           } else {
-            // 标识：Native / Snap / EVM only
             let badge = 'EVM only';
             try{
               if (getInjectedMetaMaskSolana()) badge = 'Solana';
@@ -584,7 +583,7 @@
       ];
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
-    // ✅ 使用 CORS 友好 RPC 获取 blockhash + 确认
+    // ✅ 使用 CORS 友好 RPC 获取 blockhash + 发送/确认
     async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
       if(!provider) throw new Error('No Solana provider available');
       const connection = new Connection(CHAIN.rpcEndpoint, CHAIN.commitment);
@@ -744,6 +743,7 @@
   </script>
 </body>
 </html>
+
 
 
 
