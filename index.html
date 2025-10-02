@@ -20,8 +20,7 @@
       appId: "1:483605028839:web:89804c881f445137536742",
       measurementId: "G-29ZD4V0DDJ"
     };
-    /* 可选：在外层页面或部署时注入 window.API_BASE 覆盖后端域名
-       例如：window.API_BASE = "https://你的后端.onrender.com"; */
+    // 可选: 在外层注入 window.API_BASE 覆盖后端域名
   </script>
 
   <!-- solana web3 IIFE -->
@@ -123,7 +122,7 @@
         <div class="stat"><span>Eligibility</span><span id="eligibility">Chances</span></div>
         <div class="stat"><span>Remaining chances (this wallet)</span><span id="remaining">–</span></div>
         <div class="draw-actions">
-          <button id="drawBtn" class="btn" disabled>Draw Now</button>
+          <button id="drawBtn" class="btn" disabled title="Disabled until wallet connects">Draw Now</button>
           <button id="resetBtn" class="btn" title="Local cache only">Reset (local)</button>
         </div>
         <div id="result" class="result">Result will appear here ✨</div>
@@ -240,7 +239,6 @@
     };
 
     const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
-    // 将价格从 /config 读取（默认 10000）
     let PRICE_UI = 10000;
 
     /* ===== Firebase ===== */
@@ -305,16 +303,26 @@
         const usedLocal=readUsedLocal(address);
         const used=Math.max(usedFS,usedLocal);
         if (used>usedFS) await writeUsedFS(address,used,null,isHolder,cfg);
-        return Math.max(0, allowedChancesLocal(isHolder,cfg)-used);
-      }catch(e){ console.warn('computeRemaining failed:', e); return 1; }
+        const allowed = allowedChancesLocal(isHolder,cfg);
+        const rem = Math.max(0, allowed - used);
+        console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
+        return rem;
+      }catch(e){ console.warn('computeRemaining failed:', e); return 0; }
     }
     async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
       els.walletLabel.textContent = walletAddress ? `${short(walletAddress)}${walletType?' · '+walletType:''}` : 'Not connected';
       els.disconnectBtn.style.display = walletAddress ? 'inline-flex' : 'none';
-      if (!walletAddress){ els.remaining.textContent='–'; els.drawBtn.disabled=true; els.eligibility.textContent='Chances: –'; return; }
+      if (!walletAddress){
+        els.remaining.textContent='–';
+        els.drawBtn.disabled=true;
+        els.drawBtn.title='Disabled: no wallet connected';
+        els.eligibility.textContent='Chances: –';
+        return;
+      }
       const rem = await computeRemaining(walletAddress,isHolder,cfg);
       els.remaining.textContent = String(rem);
       els.drawBtn.disabled = rem<=0;
+      els.drawBtn.title = rem<=0 ? 'Disabled: no chances left' : '';
       els.eligibility.textContent = `Chances: ${rem}`;
       const hasMint = Array.isArray(CHAIN.mints)&&CHAIN.mints[0]?.address; els.holderNote.style.display = hasMint?'none':'block';
     }
@@ -328,7 +336,7 @@
       return tips.join(' ');
     }
 
-    /* ===== 钱包检测（保持不变） ===== */
+    /* ===== 钱包检测 ===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
@@ -464,7 +472,11 @@
 
         const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
         if(!pk) throw new Error('No publicKey from wallet');
-        const address = (typeof pk.toBase64==='function' && pk.toBase58) ? pk.toBase58() : String(pk);
+
+        // ✅ 关键修复：正确判断 toBase58
+        const address =
+          (pk && typeof pk.toBase58 === 'function') ? pk.toBase58() :
+          (typeof pk === 'string') ? pk : String(pk);
 
         walletAddress = address;
         walletType    = label;
@@ -484,11 +496,14 @@
     }
 
     /* ===== Disconnect ===== */
-    els.disconnectBtn.addEventListener('click', async ()=>{ walletAddress=null; walletType=null; currentProvider=null; await updateUI(false, CONFIG_DEFAULT); });
+    els.disconnectBtn.addEventListener('click', async ()=>{
+      walletAddress=null; walletType=null; currentProvider=null;
+      await updateUI(false, CONFIG_DEFAULT);
+    });
 
-    /* ===== 后端 /config 覆盖链参数（关键修复） ===== */
+    /* ===== 后端 /config 覆盖链参数 ===== */
     function pickFrontendRpc(url){
-      if (!url) return 'https://solana.publicnode.com';            // 不再默认 Ankr，避免 403 黄条
+      if (!url) return 'https://solana.publicnode.com';
       return url;
     }
     async function loadServerChain(){
@@ -497,25 +512,23 @@
         if(!r.ok) throw new Error(`/config ${r.status}`);
         const j=await r.json();
 
-        // 必要字段写回前端运行时
         if (j.mint) CHAIN.mints[0].address = j.mint;
         if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
         if (j.treasury) CHAIN.treasury = j.treasury;
         if (j.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
         if (j.price) PRICE_UI = Number(j.price);
 
-        // 可见提示
         console.log('[config]', j);
         if (!CHAIN.mints[0].address || !CHAIN.treasury){
           showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
         }
-      }catch(e){ 
+      }catch(e){
         console.warn('loadServerChain warn:', e);
-        showBootError('Failed to load /config from backend. Buttons will stay disabled until backend is reachable.');
+        showBootError('Failed to load /config from backend. You can still do free first draw after connecting a wallet.');
       }
     }
 
-    /* ===== RPC 多路回退工具（保留；去掉 Ankr 优先项） ===== */
+    /* ===== RPC 工具 ===== */
     const PUBLIC_RPCS = [
       'https://solana.publicnode.com',
       'https://solana-rpc.publicnode.com',
@@ -525,7 +538,6 @@
       const list = [];
       if (primary) list.push(primary);
       list.push(...PUBLIC_RPCS);
-      // 去重
       const seen=new Set(); return list.filter(u=>{const k=(u||'').trim(); if(!k||seen.has(k)) return false; seen.add(k); return true;});
     }
     function isApiKeyErr(err){ const s=String(err?.message||err||''); return /-32052|api key|forbidden|403/i.test(s); }
@@ -565,7 +577,6 @@
       const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
 
-      // A) 优先：直接走钱包
       if (typeof provider.signAndSendTransaction === 'function'){
         try {
           const sig = await signAndSendViaWallet(tx);
@@ -576,7 +587,6 @@
         }
       }
 
-      // B) 我们补充 blockhash，必要时自行广播
       const rpclist = buildRpcList(CHAIN.rpcEndpoint);
       let lastErr = null;
 
@@ -722,7 +732,7 @@
 
     /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
-    await loadServerChain();              // << 从 /config 读取后端参数（关键）
+    await loadServerChain();
     await updateGlowUIWithRetry();
     await updateUI(false, CONFIG_DEFAULT);
     await updateWinnersUI();
