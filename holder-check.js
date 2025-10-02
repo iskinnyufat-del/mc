@@ -2,7 +2,7 @@
 // 作用：统一“是否持币 + 次数配置”
 // - 发币前：用 Firestore 的 config/draw（和可选的 whitelist/{address}）决定
 // - 发币后：优先走链上余额（根据 index.html 传入的 CHAIN 配置）
-// ⭐ 加强版：多 RPC 回退 + 2s 超时；403/-32052 自动切换到其他公共 RPC；记住上次可用 RPC
+// 加强版：多 RPC 回退 + 超时保护；403/-32052 自动切换到其他公共 RPC；记住上次可用 RPC
 
 /* =========================
  * 远程配置：config/draw
@@ -36,7 +36,7 @@ export async function loadRemoteConfig(db, { defaults } = {}) {
 async function isWhitelisted(db, address) {
   try {
     const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js");
-    // ⚠️ Solana 地址区分大小写，这里先用原值；为了兼容你可能存了小写版本，顺带查一遍小写
+    // 先查原地址，再查小写（兼容你可能存了小写）
     const ref = doc(db, 'whitelist', address);
     const snap = await getDoc(ref);
     if (snap.exists() && snap.data()?.holder === true) return true;
@@ -68,7 +68,7 @@ function isApiKeyError(e) {
   return /-32052|api key|apikey|forbidden|403/i.test(msg);
 }
 
-function withTimeout(promise, ms = 2000) {
+function withTimeout(promise, ms = 2500) {
   return Promise.race([
     promise,
     new Promise((_, rej) => setTimeout(() => rej(new Error('rpc-timeout')), ms))
@@ -83,13 +83,14 @@ function buildRpcList(chainConfig) {
   const extras = Array.isArray(chainConfig?.extraRpcs) ? chainConfig.extraRpcs.map(String) : [];
 
   const LS_KEY = `holdercheck:lastGoodRpc:${cluster}`;
-  const lastGood = localStorage.getItem(LS_KEY) || '';
+  let lastGood = '';
+  try { lastGood = localStorage.getItem(LS_KEY) || ''; } catch {}
 
-  // 你也可以把自有 Key 的 Helius/Alchemy 放 extras（比如 https://.../?api-key=xxxx ）
+  // 公共回退优先 publicnode，Ankr 放后面（浏览器易 403）
   const publicFallbacks = [
     'https://solana.publicnode.com',
-    'https://rpc.ankr.com/solana',
     'https://solana-rpc.publicnode.com',
+    'https://rpc.ankr.com/solana',
   ];
 
   const list = dedupe([
@@ -97,11 +98,10 @@ function buildRpcList(chainConfig) {
     primaryA || primaryB,
     ...extras,
     ...publicFallbacks,
-    // 官方 API 放到最后（前端直连常见 403）
+    // 官方 API 放到最后（前端直连常见限流/CORS）
     'https://api.mainnet-beta.solana.com',
   ]).filter(Boolean);
 
-  // 过滤明显不可用的“示例占位符”
   return list.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u));
 }
 
@@ -131,18 +131,18 @@ async function checkAnyMintHold({ owner, chainConfig }) {
     try {
       const connection = new Connection(rpc, commitment);
 
-      // 逐个 mint 检查余额（每次 2s 超时保护）
+      // 逐个 mint 检查余额（每次 2.5s 超时保护）
       for (const mint of mints) {
         if (!mint?.address) continue;
         const mintPk = new PublicKey(mint.address);
-        const programId = mint.tokenProgram ? new PublicKey(mint.tokenProgram) : undefined;
 
+        // 重要：filter 只能二选一，这里只用 mint 过滤
         const resp = await withTimeout(
           connection.getParsedTokenAccountsByOwner(
             ownerPk,
-            { mint: mintPk, ...(programId ? { programId } : {}) }
+            { mint: mintPk }
           ),
-          2000
+          2500
         );
 
         let total = 0;
@@ -156,7 +156,7 @@ async function checkAnyMintHold({ owner, chainConfig }) {
           return { ok: true, mint: mint.address, amount: total, rpcUsed: rpc };
         }
       }
-      // 该 RPC 正常返回但没命中任何 mint → 不是持有者
+      // 该 RPC 正常返回但没命中任何 mint → 不是持有者（记住这个可用 RPC）
       rememberGoodRpc(cluster, rpc);
       return { ok: false, rpcUsed: rpc };
     } catch (e) {
@@ -210,6 +210,5 @@ export function allowedChances(isHolder, config) {
   const n = Number(config?.nonHolderChances ?? 1);
   return isHolder ? h : n;
 }
-
 
 
