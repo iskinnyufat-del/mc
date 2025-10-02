@@ -242,30 +242,12 @@
     let PRICE_UI = 10000;
 
     /* ===== Firebase ===== */
-    const app = initializeApp(window.FIREBASE_CONFIG);
+    const app = initializeApp(window.FIREBASE_C OFIG);
     const db  = getFirestore(app);
-
+  </script>
+  <script type="module">
     /* ===== holder-check ===== */
-    let loadRemoteConfig, resolveIsHolder, allowedChances;
-    try {
-      const m = await import('./holder-check.js');
-      loadRemoteConfig = m.loadRemoteConfig;
-      resolveIsHolder  = m.resolveIsHolder;
-      allowedChances   = m.allowedChances;
-    } catch {
-      loadRemoteConfig = async () => ({ ...CONFIG_DEFAULT });
-      resolveIsHolder  = async () => false;
-      allowedChances   = (isHolder, cfg) => isHolder ? (cfg?.holderChances ?? 3) : (cfg?.nonHolderChances ?? 1);
-    }
-    async function safeResolveIsHolder({ db, address, chainConfig, config, timeoutMs = 2000 }) {
-      const isSol = typeof address === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) && !address.startsWith('0x');
-      if (!isSol || typeof resolveIsHolder !== 'function') return false;
-      try {
-        const p = resolveIsHolder({ db, address, chainConfig, config });
-        const t = new Promise((_, rej) => setTimeout(() => rej(new Error('holder-check-timeout')), timeoutMs));
-        return await Promise.race([p, t]).catch(() => false);
-      } catch { return false; }
-    }
+    import { loadRemoteConfig, resolveIsHolder, allowedChances } from './holder-check.js';
 
     /* ===== State & helpers ===== */
     let walletAddress = null;
@@ -307,7 +289,13 @@
         const rem = Math.max(0, allowed - used);
         console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
         return rem;
-      }catch(e){ console.warn('computeRemaining failed:', e); return 0; }
+      }catch(e){
+        // ⭐ 关键修复：Firestore 不可读时不要禁用按钮，按本地缓存计算
+        console.warn('computeRemaining failed (fallback to local only):', e);
+        const allowed = allowedChancesLocal(isHolder,cfg);
+        const usedLocal=readUsedLocal(address);
+        return Math.max(0, allowed - usedLocal);
+      }
     }
     async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
       els.walletLabel.textContent = walletAddress ? `${short(walletAddress)}${walletType?' · '+walletType:''}` : 'Not connected';
@@ -336,7 +324,7 @@
       return tips.join(' ');
     }
 
-    /* ===== 钱包检测 ===== */
+    /* ===== 钱包检测（略） ===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
@@ -473,7 +461,6 @@
         const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
         if(!pk) throw new Error('No publicKey from wallet');
 
-        // ✅ 关键修复：正确判断 toBase58
         const address =
           (pk && typeof pk.toBase58 === 'function') ? pk.toBase58() :
           (typeof pk === 'string') ? pk : String(pk);
@@ -501,30 +488,49 @@
       await updateUI(false, CONFIG_DEFAULT);
     });
 
-    /* ===== 后端 /config 覆盖链参数 ===== */
+    /* ===== 后端 /config 覆盖链参数（兼容多种返回） ===== */
     function pickFrontendRpc(url){
       if (!url) return 'https://solana.publicnode.com';
       return url;
     }
     async function loadServerChain(){
+      const applyCfg = (cfg) => {
+        if (!cfg) return;
+        if (cfg.mint) CHAIN.mints[0].address = cfg.mint;
+        if (typeof cfg.decimals === 'number') CHAIN.decimals = cfg.decimals;
+        if (typeof cfg.mintDecimals === 'number') CHAIN.decimals = cfg.mintDecimals;
+        if (cfg.treasury) CHAIN.treasury = cfg.treasury;
+        if (cfg.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(cfg.rpc);
+        if (typeof cfg.price === 'number') PRICE_UI = cfg.price;
+        if (typeof cfg.costUi === 'number') PRICE_UI = cfg.costUi;
+        if (typeof cfg.drawCostUi === 'number') PRICE_UI = cfg.drawCostUi;
+      };
+
       try{
+        // 1) 优先 /config
         const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
-        if(!r.ok) throw new Error(`/config ${r.status}`);
-        const j=await r.json();
-
-        if (j.mint) CHAIN.mints[0].address = j.mint;
-        if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
-        if (j.treasury) CHAIN.treasury = j.treasury;
-        if (j.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
-        if (j.price) PRICE_UI = Number(j.price);
-
-        console.log('[config]', j);
-        if (!CHAIN.mints[0].address || !CHAIN.treasury){
-          showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
+        if(r.ok){
+          const j=await r.json();
+          applyCfg(j?.config || j);
+        } else {
+          throw new Error(`/config ${r.status}`);
         }
       }catch(e){
-        console.warn('loadServerChain warn:', e);
-        showBootError('Failed to load /config from backend. You can still do free first draw after connecting a wallet.');
+        console.warn('loadServerChain /config warn:', e);
+        // 2) 退回 /status 或 /
+        try{
+          const r2 = await fetch(`${API_BASE}/status`, {headers:{'Accept':'application/json'}, cache:'no-store'});
+          if (r2.ok){ applyCfg(await r2.json()); }
+          else {
+            const r3 = await fetch(`${API_BASE}/`, {headers:{'Accept':'application/json'}, cache:'no-store'});
+            if (r3.ok){ applyCfg(await r3.json()); }
+          }
+        }catch(e2){ console.warn('loadServerChain fallback warn:', e2); }
+      }
+
+      console.log('[config-applied]', {CHAIN, PRICE_UI});
+      if (!CHAIN.mints[0].address || !CHAIN.treasury){
+        showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
       }
     }
 
@@ -621,6 +627,17 @@
     }
 
     /* ===== DRAW（含扣款） ===== */
+    async function safeResolveIsHolder({ db, address, chainConfig, config, timeoutMs = 2000 }) {
+      const isSol = typeof address === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) && !address.startsWith('0x');
+      if (!isSol) return false;
+      try {
+        return await Promise.race([
+          resolveIsHolder({ db, address, chainConfig, config }),
+          new Promise((_, rej)=> setTimeout(()=> rej(new Error('holder-check-timeout')), timeoutMs))
+        ]).catch(()=> false);
+      } catch { return false; }
+    }
+
     async function performDraw(){
       if(!walletAddress) return;
 
@@ -641,7 +658,7 @@
         }
         if (!CHAIN.mints?.[0]?.address || !CHAIN.treasury){
           els.result.textContent='Payment not configured. Please try again later.';
-          console.warn('Missing mint/treasury from backend /config');
+          console.warn('Missing mint/treasury from backend');
           return;
         }
       }
@@ -739,6 +756,7 @@
   </script>
 </body>
 </html>
+
 
 
 
