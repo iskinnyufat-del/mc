@@ -546,21 +546,20 @@
         if (j.mint) CHAIN.mints[0].address = j.mint;
         if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
         if (j.treasury) CHAIN.treasury = j.treasury;
+        if (j.rpc) CHAIN.rpcEndpoint = j.rpc; // ✅ 覆盖前端 RPC，供 holder-check 使用
       }catch(e){ console.warn('loadServerChain warn:', e); }
     }
 
     /* ===== SPL Transfer Helpers ===== */
-    const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
+    const { PublicKey, Transaction, TransactionInstruction } = window.solanaWeb3;
 
     function u64LE(nBig){
-      // nBig: BigInt
       const b = new Uint8Array(8);
       let x = BigInt(nBig);
       for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; }
       return b;
     }
 
-    // derive ATA = findProgramAddressSync([owner, tokenProgram, mint], associatedTokenProgram)
     function deriveATA(ownerPk, mintPk){
       return PublicKey.findProgramAddressSync(
         [ ownerPk.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPk.toBuffer() ],
@@ -568,12 +567,11 @@
       )[0];
     }
 
-    // Minimal createTransferCheckedInstruction (Token Program v3)
     function createTransferCheckedInstruction(source, mint, destination, owner, amount, decimals){
       const data = new Uint8Array(1 + 8 + 1);
       data[0] = 12; // TransferChecked
-      data.set(u64LE(BigInt(amount)), 1); // amount (u64 LE)
-      data[1+8] = Number(decimals);       // decimals (u8)
+      data.set(u64LE(BigInt(amount)), 1);
+      data[1+8] = Number(decimals);
 
       const keys = [
         { pubkey: source,      isSigner:false, isWritable:true  },
@@ -584,9 +582,9 @@
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
 
+    // ✅ 不再在前端直连 RPC：让钱包负责填 blockhash/feePayer 和广播；我们只拿 signature
     async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
       if(!provider) throw new Error('No Solana provider available');
-      const connection = new Connection(CHAIN.rpcEndpoint, CHAIN.commitment);
 
       const fromOwner = new PublicKey(fromAddress);
       const toOwner   = new PublicKey(toOwnerAddress);
@@ -595,50 +593,35 @@
       const fromATA = deriveATA(fromOwner, mintPk);
       const toATA   = deriveATA(toOwner, mintPk);
 
-      const feePayer = fromOwner;
-      const tx = new Transaction();
-      // 计算 base units
       const amount = (BigInt(Math.trunc(amountUi)) * (10n ** BigInt(decimals)));
 
+      const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
-
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CHAIN.commitment);
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = feePayer;
 
       let sig;
       if (typeof provider.signAndSendTransaction === 'function'){
         const res = await provider.signAndSendTransaction(tx);
-        sig = res?.signature || res; // Phantom 返回 {signature}
-      } else if (typeof provider.signTransaction === 'function'){
-        const signed = await provider.signTransaction(tx);
-        const raw = signed.serialize();
-        sig = await connection.sendRawTransaction(raw, { skipPreflight:false });
+        sig = res?.signature || res;
       } else {
-        throw new Error('Wallet cannot sign Solana transactions');
+        // 某些较旧钱包只提供 signTransaction，但无发送能力；这里提示更换钱包
+        throw new Error('Wallet cannot send transaction; please use Phantom/Solflare/Backpack.');
       }
-
-      // 等待确认（confirmed）
-      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment);
-      return sig;
+      return String(sig);
     }
 
     /* ===== DRAW（含扣款） ===== */
     async function performDraw(){
       if(!walletAddress) return;
 
-      // 读取远端 holder 配置与资格
       const cfg = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
       const isSol = isSolanaAddress(walletAddress);
       const isHolder = isSol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
       const rem = await computeRemaining(walletAddress,isHolder,cfg);
       if(rem<=0){ els.result.textContent='No chances left.'; return; }
 
-      // 第一次免费：直接 /draw
       const usedSoFar = Math.max(readUsedLocal(walletAddress), await readUsedFS(walletAddress));
       const needPay = usedSoFar >= 1; // 第二次及以后需要扣费
 
-      // 不是 Solana 地址 或 provider 不具备 Solana 能力时，禁止付费抽
       if (needPay){
         if (!isSol) { els.result.textContent='Please connect a Solana wallet for paid draws.'; return; }
         if (!isSolanaCapableProvider(currentProvider)) {
@@ -656,7 +639,6 @@
       try{
         let paySig = null;
 
-        // 付费路径：先转 SPL，再调用 /draw
         if (needPay){
           const sig = await sendSplTransferChecked({
             provider: currentProvider,
@@ -667,7 +649,7 @@
             decimals: CHAIN.decimals ?? 6
           });
           paySig = String(sig);
-          els.result.textContent = 'Payment confirmed. Drawing… ✨';
+          els.result.textContent = 'Payment submitted. Drawing… ✨';
         }
 
         const r = await fetch(`${API_BASE}/draw`, { 
@@ -743,12 +725,14 @@
 
     /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
-    await loadServerChain(); // 从后端覆盖 mint/treasury/decimals
+    await loadServerChain(); // 从后端覆盖 mint/treasury/decimals/rpc
     await updateGlowUIWithRetry();
     await updateUI(false, CONFIG_DEFAULT);
     await updateWinnersUI();
   </script>
 </body>
 </html>
+
+
 
 
