@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -22,7 +22,7 @@
     };
   </script>
 
-  <!-- web3.js（IIFE） -->
+  <!-- solana web3 IIFE -->
   <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 
   <style>
@@ -197,7 +197,7 @@
              collection, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js";
 
     /* ===== Backend API ===== */
-    const API_BASE = "https://mooncake-1.onrender.com"; // ← 改成你的后端域名
+    const API_BASE = "https://mooncake-1.onrender.com";
 
     /* ===== UI refs ===== */
     const bootErr = document.getElementById('bootError');
@@ -224,26 +224,27 @@
 
     /* ===== Activity & chain ===== */
     const ACTIVITY_ID = 'mid-autumn-2025';
-    // 初始占位（会从 API 根路径 "/" 覆盖）
-    const CHAIN = { 
+    const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
+    const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+    const CHAIN = {
       cluster:"mainnet-beta",
       rpcEndpoint:"https://api.mainnet-beta.solana.com",
       commitment:"confirmed",
       mints:[{ address:"8QMYz8BiAcWZMLWnAn17Mj2WMQ6q6GcWBtSdzAovpump", tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001 }],
-      decimals: 6,
-      treasury: null
+      decimals:6,
+      treasury:null
     };
+
     const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
-    const PRICE_UI = 10000; // 10,000 tokens (UI)
-    const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
-    const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-    const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    const PRICE_UI = 10000;
 
     /* ===== Firebase ===== */
     const app = initializeApp(window.FIREBASE_CONFIG);
     const db  = getFirestore(app);
 
-    /* ===== holder-check (存在则用) ===== */
+    /* ===== holder-check ===== */
     let loadRemoteConfig, resolveIsHolder, allowedChances;
     try {
       const m = await import('./holder-check.js');
@@ -255,8 +256,6 @@
       resolveIsHolder  = async () => false;
       allowedChances   = (isHolder, cfg) => isHolder ? (cfg?.holderChances ?? 3) : (cfg?.nonHolderChances ?? 1);
     }
-
-    // ✅ 403 容错：2s 超时 + 失败一律按非持有者
     async function safeResolveIsHolder({ db, address, chainConfig, config, timeoutMs = 2000 }) {
       const isSol = typeof address === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) && !address.startsWith('0x');
       if (!isSol || typeof resolveIsHolder !== 'function') return false;
@@ -270,7 +269,7 @@
     /* ===== State & helpers ===== */
     let walletAddress = null;
     let walletType = null;
-    let currentProvider = null; // ✅ 保存已连接的 Solana provider（用于签名与发送）
+    let currentProvider = null;
 
     const short = (addr)=> addr ? (addr.startsWith('0x') ? addr.slice(0,6)+'…'+addr.slice(-4): addr.slice(0,4)+'…'+addr.slice(-4)) : '';
     const tail  = (addr,n=4)=> addr ? '…'+String(addr).slice(-n) : '';
@@ -278,17 +277,10 @@
     const localKey= (addr)=> `draw:${ACTIVITY_ID}:${String(addr).toLowerCase()}`;
     const readUsedLocal =(addr)=>{ try{ return Number(JSON.parse(localStorage.getItem(localKey(addr)))?.used||0);}catch{return 0;} };
     const writeUsedLocal=(addr,used)=> localStorage.setItem(localKey(addr), JSON.stringify({used,ts:Date.now()}));
+    const isSolanaAddress = (addr)=> typeof addr==='string' && !addr.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+    const isSolanaCapableProvider = (p)=> !!p && (typeof p.signAndSendTransaction==='function' || typeof p.signTransaction==='function');
+
     function allowedChancesLocal(isHolder,cfg){ return allowedChances(isHolder,cfg); }
-
-    function isSolanaAddress(addr){
-      return typeof addr === 'string'
-        && !addr.startsWith('0x')
-        && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
-    }
-    function isSolanaCapableProvider(p){
-      return !!p && (typeof p.signAndSendTransaction === 'function' || typeof p.signTransaction === 'function');
-    }
-
     async function ensureParticipant(address,isHolder,cfg){
       try{
         const ref = partDoc(address);
@@ -333,89 +325,54 @@
       return tips.join(' ');
     }
 
-    /* ===== 传统 Solana 钱包检测 ===== */
+    /* ===== 钱包检测 ===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
     function detectOKX(){ return (window.okxwallet?.solana || null); }
     function detectMagicEden(){ return (window.magicEden?.solana || null); }
-
-    /* ===== MetaMask 接入：Solana 原生优先 → 已装 Snap → EVM 回退 ===== */
     function getMetaMaskProvider(){
-      const eth = window.ethereum;
-      if (!eth) return null;
+      const eth = window.ethereum; if(!eth) return null;
       if (eth.isMetaMask) return eth;
       if (Array.isArray(eth.providers)) return eth.providers.find(p => p && p.isMetaMask) || null;
       return null;
     }
-    function getInjectedMetaMaskSolana(){
-      if (window.solana?.isMetaMask) return window.solana;
-      if (window.metamask?.solana)    return window.metamask.solana;
-      return null;
-    }
+    function getInjectedMetaMaskSolana(){ if (window.solana?.isMetaMask) return window.solana; if (window.metamask?.solana) return window.metamask.solana; return null; }
     async function getInstalledSnaps(){
-      const mm = getMetaMaskProvider();
-      if(!mm) return {};
-      try { return await mm.request({ method:'wallet_getSnaps' }); }
-      catch { return {}; }
+      const mm = getMetaMaskProvider(); if(!mm) return {};
+      try { return await mm.request({ method:'wallet_getSnaps' }); } catch { return {}; }
     }
-    function pickSolanaSnapIdFrom(snaps){
-      for (const s of Object.values(snaps || {})) {
-        if (/solana/i.test(s?.id || '')) return s.id;
-      }
-      return null;
-    }
+    function pickSolanaSnapIdFrom(snaps){ for (const s of Object.values(snaps || {})) { if (/solana/i.test(s?.id || '')) return s.id; } return null; }
     async function invokeSnap(snapId, method, params = {}){
       const mm = getMetaMaskProvider(); if(!mm) throw new Error('MetaMask not detected');
-      try {
-        return await mm.request({ method:'wallet_invokeSnap', params:{ snapId, request:{ method, params } } });
-      } catch (_) {
-        return await mm.request({ method:'wallet_invokeSnap', params:[snapId, { method, params }] });
-      }
+      try { return await mm.request({ method:'wallet_invokeSnap', params:{ snapId, request:{ method, params } } }); }
+      catch { return await mm.request({ method:'wallet_invokeSnap', params:[snapId, { method, params }] }); }
     }
     async function connectMetaMaskEVM(){
-      const mm = getMetaMaskProvider();
-      if(!mm) throw new Error('MetaMask not detected');
+      const mm = getMetaMaskProvider(); if(!mm) throw new Error('MetaMask not detected');
       const accounts = await mm.request({ method:'eth_requestAccounts' });
-      const addr = accounts?.[0];
-      if(!addr) throw new Error('No EVM account');
-      currentProvider = null; // EVM-only，无 Solana 能力
-      return { address:String(addr), label:'MetaMask (EVM)' };
+      const addr = accounts?.[0]; if(!addr) throw new Error('No EVM account');
+      currentProvider = null; return { address:String(addr), label:'MetaMask (EVM)' };
     }
     async function connectMetaMaskSolana(){
-      const mm = getMetaMaskProvider();
-      if(!mm) throw new Error('MetaMask not detected');
+      const mm = getMetaMaskProvider(); if(!mm) throw new Error('MetaMask not detected');
       const injected = getInjectedMetaMaskSolana();
-      if (injected){
-        const res = await connectSolanaProvider('MetaMask (Solana)', injected);
-        return res;
-      }
+      if (injected){ return await connectSolanaProvider('MetaMask (Solana)', injected); }
       try{
-        const snaps = await getInstalledSnaps();
-        const snapId = pickSolanaSnapIdFrom(snaps);
+        const snaps = await getInstalledSnaps(); const snapId = pickSolanaSnapIdFrom(snaps);
         if (snapId){
-          const methods = ['getAccounts','getAccount','solana_getAccounts'];
-          let accounts = null, lastErr = null;
-          for (const m of methods){
-            try { const r = await invokeSnap(snapId,m); if(r){ accounts=r; break; } } catch(e){ lastErr = e; }
-          }
+          const methods = ['getAccounts','getAccount','solana_getAccounts']; let accounts=null,lastErr=null;
+          for (const m of methods){ try{ const r = await invokeSnap(snapId,m); if(r){ accounts=r; break; } }catch(e){ lastErr=e; } }
           if (!accounts) throw lastErr || new Error('No accounts from Solana Snap');
-          let addr = null;
-          if (Array.isArray(accounts) && accounts.length) {
-            const first = accounts[0];
-            addr = typeof first === 'string' ? first : (first?.address || first?.publicKey || null);
-          } else if (typeof accounts === 'string') {
-            addr = accounts;
-          }
+          let addr=null; if (Array.isArray(accounts) && accounts.length){ const first=accounts[0]; addr = typeof first==='string' ? first : (first?.address||first?.publicKey||null); }
+          else if (typeof accounts==='string'){ addr = accounts; }
           if (!addr) throw new Error('Unable to read Solana address');
-          currentProvider = null;
-          return { address:String(addr), label:'MetaMask (Solana · Snap)' };
+          currentProvider = null; return { address:String(addr), label:'MetaMask (Solana · Snap)' };
         }
-      }catch(_){ /* ignore */ }
+      }catch{}
       return await connectMetaMaskEVM();
     }
 
-    /* ===== 钱包列表（异步渲染，含 MetaMask 状态） ===== */
     const WALLET_DEFS = [
       { key:'phantom',   label:'Phantom',    detect:()=>detectPhantom(),   install:'https://phantom.app/' },
       { key:'solflare',  label:'Solflare',   detect:()=>detectSolflare(),  install:'https://solflare.com/' },
@@ -450,10 +407,7 @@
             let badge = 'EVM only';
             try{
               if (getInjectedMetaMaskSolana()) badge = 'Solana';
-              else {
-                const snaps = await getInstalledSnaps();
-                if (pickSolanaSnapIdFrom(snaps)) badge = 'Solana (Snap)';
-              }
+              else { const snaps = await getInstalledSnaps(); if (pickSolanaSnapIdFrom(snaps)) badge = 'Solana (Snap)'; }
             }catch{}
             btn.innerHTML = `<span>🦊</span><span>${def.label}</span><span class="badge">${badge}</span>`;
 
@@ -464,7 +418,6 @@
                 walletType    = res.label;
                 hideModal();
 
-                // 先按非持有者更新（避免阻塞）
                 await updateUI(false, CONFIG_DEFAULT);
 
                 const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
@@ -483,11 +436,9 @@
           continue;
         }
 
-        // 其他 Solana 钱包
         const provider = def.detect();
-        if (provider){
-          els.walletList.appendChild(providerConnectButton(def.label, provider));
-        } else {
+        if (provider){ els.walletList.appendChild(providerConnectButton(def.label, provider)); }
+        else {
           const btn = document.createElement('button');
           btn.className = 'wallet-btn';
           btn.innerHTML = `<span>💠</span><span>${def.label}</span><span class="badge">Not installed</span>`;
@@ -503,11 +454,9 @@
     els.closeModalBtn.addEventListener('click', hideModal);
     els.refreshWalletsBtn.addEventListener('click', renderWalletList);
 
-    /* ===== 传统 provider 连接（Phantom / Solflare / Backpack / OKX / MagicEden） ===== */
     async function connectSolanaProvider(label, provider){
       try{
-        let resp=null;
-        try{ resp = await provider.connect?.({ onlyIfTrusted:true }); }catch{}
+        let resp=null; try{ resp = await provider.connect?.({ onlyIfTrusted:true }); }catch{}
         if(!resp && provider.connect) resp = await provider.connect();
 
         const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
@@ -516,10 +465,9 @@
 
         walletAddress = address;
         walletType    = label;
-        currentProvider = provider; // ✅ 记录 provider 用于后续签名
+        currentProvider = provider;
         hideModal();
 
-        // 先按非持有者刷新（不被 403 阻塞）
         await updateUI(false, CONFIG_DEFAULT);
 
         const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
@@ -532,14 +480,11 @@
       }
     }
 
-    /* ===== Disconnect（简单处理） ===== */
-    els.disconnectBtn.addEventListener('click', async ()=>{
-      walletAddress=null; walletType=null; currentProvider=null; await updateUI(false, CONFIG_DEFAULT);
-    });
+    /* ===== Disconnect ===== */
+    els.disconnectBtn.addEventListener('click', async ()=>{ walletAddress=null; walletType=null; currentProvider=null; await updateUI(false, CONFIG_DEFAULT); });
 
-    /* ===== / 根路径拉取后端链上参数（含 RPC） ===== */
+    /* ===== 后端 "/" 覆盖链参数，并在前端替换 RPC ===== */
     function pickFrontendRpc(url){
-      // 浏览器直连 api.mainnet-beta.solana.com 常见 403；这里换成 CORS 友好公共 RPC（仅前端）
       if (!url) return 'https://rpc.ankr.com/solana';
       if (/api\.mainnet-beta\.solana\.com/i.test(url)) return 'https://rpc.ankr.com/solana';
       return url;
@@ -553,28 +498,35 @@
         if (j.mint) CHAIN.mints[0].address = j.mint;
         if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
         if (j.treasury) CHAIN.treasury = j.treasury;
-        CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc); // ✅ 替换为前端可用 RPC
+        CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
       }catch(e){ console.warn('loadServerChain warn:', e); }
     }
 
-    /* ===== SPL Transfer Helpers ===== */
-    function u64LE(nBig){
-      const b = new Uint8Array(8);
-      let x = BigInt(nBig);
-      for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; }
-      return b;
+    /* ===== RPC 多路回退工具（发送阶段也可用） ===== */
+    const PUBLIC_RPCS = [
+      'https://rpc.ankr.com/solana',
+      'https://solana.publicnode.com',
+      'https://solana-rpc.publicnode.com'
+    ];
+    function buildRpcList(primary){
+      const list = [];
+      if (primary && !/api\.mainnet-beta\.solana\.com/i.test(primary)) list.push(primary);
+      list.push(...PUBLIC_RPCS);
+      if (primary && /api\.mainnet-beta\.solana\.com/i.test(primary)) list.push(primary);
+      // 去重
+      const seen=new Set(); return list.filter(u=>{const k=(u||'').trim(); if(!k||seen.has(k)) return false; seen.add(k); return true;});
     }
+    function isApiKeyErr(err){ const s=String(err?.message||err||''); return /-32052|api key|forbidden|403/i.test(s); }
+    function withTimeout(p,ms=2500){ return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('rpc-timeout')),ms))]); }
+
+    /* ===== SPL Transfer Helpers ===== */
+    function u64LE(nBig){ const b = new Uint8Array(8); let x = BigInt(nBig); for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; } return b; }
     function deriveATA(ownerPk, mintPk){
-      return PublicKey.findProgramAddressSync(
-        [ ownerPk.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPk.toBuffer() ],
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      )[0];
+      return PublicKey.findProgramAddressSync([ ownerPk.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPk.toBuffer() ], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
     }
     function createTransferCheckedInstruction(source, mint, destination, owner, amount, decimals){
       const data = new Uint8Array(1 + 8 + 1);
-      data[0] = 12; // TransferChecked
-      data.set(u64LE(BigInt(amount)), 1);
-      data[1+8] = Number(decimals);
+      data[0] = 12; data.set(u64LE(BigInt(amount)), 1); data[1+8] = Number(decimals);
       const keys = [
         { pubkey: source,      isSigner:false, isWritable:true  },
         { pubkey: mint,        isSigner:false, isWritable:false },
@@ -583,10 +535,15 @@
       ];
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
-    // ✅ 使用 CORS 友好 RPC 获取 blockhash + 发送/确认
+
+    async function signAndSendViaWallet(tx){
+      // 直接让钱包补全 blockhash & feePayer 并广播（优先方案）
+      const res = await currentProvider.signAndSendTransaction(tx);
+      return res?.signature || res;
+    }
+
     async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
       if(!provider) throw new Error('No Solana provider available');
-      const connection = new Connection(CHAIN.rpcEndpoint, CHAIN.commitment);
 
       const fromOwner = new PublicKey(fromAddress);
       const toOwner   = new PublicKey(toOwnerAddress);
@@ -594,30 +551,61 @@
 
       const fromATA = deriveATA(fromOwner, mintPk);
       const toATA   = deriveATA(toOwner, mintPk);
-
-      const amount = (BigInt(Math.trunc(amountUi)) * (10n ** BigInt(decimals)));
+      const amount  = (BigInt(Math.trunc(amountUi)) * (10n ** BigInt(decimals)));
 
       const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
 
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CHAIN.commitment);
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = fromOwner;
-
-      let sig;
+      // A) 优先：直接走钱包 SAS，不自己取 blockhash（避免 403）
       if (typeof provider.signAndSendTransaction === 'function'){
-        const res = await provider.signAndSendTransaction(tx);
-        sig = res?.signature || res;
-      } else if (typeof provider.signTransaction === 'function'){
-        const signed = await provider.signTransaction(tx);
-        const raw = signed.serialize();
-        sig = await connection.sendRawTransaction(raw, { skipPreflight:false });
-      } else {
-        throw new Error('Wallet cannot send transaction; please use Phantom/Solflare/Backpack.');
+        try {
+          const sig = await signAndSendViaWallet(tx);
+          return String(sig);
+        } catch (e) {
+          const msg = String(e?.message||e||'');
+          // 某些钱包需要我们先填 blockhash，再试一次
+          if (!/blockhash/i.test(msg) && !/recent/i.test(msg)) {
+            // 非 blockhash 问题，直接抛出
+            throw e;
+          }
+          // 继续走 B 路径
+        }
       }
 
-      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment);
-      return String(sig);
+      // B) 回退：我们自行取 blockhash（多 RPC 轮询），再按钱包能力发送
+      const rpclist = buildRpcList(CHAIN.rpcEndpoint);
+      let lastErr = null;
+
+      for (const endpoint of rpclist) {
+        try {
+          const conn = new Connection(endpoint, CHAIN.commitment);
+          const { blockhash, lastValidBlockHeight } = await withTimeout(conn.getLatestBlockhash(CHAIN.commitment), 2500);
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = fromOwner;
+
+          let sig;
+          if (typeof provider.signAndSendTransaction === 'function'){
+            // 让钱包发送（即使用它的网络），我们只负责补全 blockhash
+            const res = await provider.signAndSendTransaction(tx);
+            sig = res?.signature || res;
+          } else if (typeof provider.signTransaction === 'function'){
+            // 我们来发送到当前 conn
+            const signed = await provider.signTransaction(tx);
+            const raw = signed.serialize();
+            sig = await withTimeout(conn.sendRawTransaction(raw, { skipPreflight:false }), 4000);
+            await withTimeout(conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment), 6000);
+          } else {
+            throw new Error('Wallet cannot send transaction; please use Phantom/Solflare/Backpack.');
+          }
+          return String(sig);
+        } catch (err) {
+          lastErr = err;
+          if (isApiKeyErr(err)) { console.warn('[send] RPC key/403, switch next:', endpoint); continue; }
+          console.warn('[send] RPC error, try next:', endpoint, err);
+          continue;
+        }
+      }
+      throw lastErr || new Error('all rpc failed');
     }
 
     /* ===== DRAW（含扣款） ===== */
@@ -631,7 +619,7 @@
       if(rem<=0){ els.result.textContent='No chances left.'; return; }
 
       const usedSoFar = Math.max(readUsedLocal(walletAddress), await readUsedFS(walletAddress));
-      const needPay = usedSoFar >= 1; // 第二次及以后需要扣费
+      const needPay = usedSoFar >= 1;
 
       if (needPay){
         if (!isSol) { els.result.textContent='Please connect a Solana wallet for paid draws.'; return; }
@@ -666,11 +654,7 @@
         const r = await fetch(`${API_BASE}/draw`, { 
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
-          body: JSON.stringify({ 
-            wallet: walletAddress, 
-            clientSeed: crypto.randomUUID(),
-            paySig: paySig || null
-          }) 
+          body: JSON.stringify({ wallet: walletAddress, clientSeed: crypto.randomUUID(), paySig: paySig || null }) 
         });
         const data = await r.json().catch(()=>null);
         if(!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
@@ -713,7 +697,7 @@
       catch(e){ console.error('[MOONGlow] failed:', e); els.glowGlobal.textContent='—'; els.glowError.textContent='Global counter failed.'; }
     }
 
-    /* ===== Winners（后端优先，其次 Firestore） ===== */
+    /* ===== Winners ===== */
     async function fetchLatestWinners(){
       try{
         const r=await fetch(`${API_BASE}/draws/latest?limit=5`,{headers:{'Accept':'application/json'}});
@@ -736,13 +720,15 @@
 
     /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
-    await loadServerChain(); // 从后端 "/" 覆盖 mint/treasury/decimals/rpc（并做前端 RPC 替换）
+    await loadServerChain();
     await updateGlowUIWithRetry();
     await updateUI(false, CONFIG_DEFAULT);
     await updateWinnersUI();
   </script>
 </body>
 </html>
+
+
 
 
 
