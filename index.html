@@ -22,7 +22,7 @@
     };
   </script>
 
-  <!-- 仅用于少量类型/兼容；不强依赖它注入 provider -->
+  <!-- web3.js（IIFE） -->
   <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
 
   <style>
@@ -224,9 +224,19 @@
 
     /* ===== Activity & chain ===== */
     const ACTIVITY_ID = 'mid-autumn-2025';
-    const CHAIN = { cluster:"mainnet-beta", rpcEndpoint:"https://api.mainnet-beta.solana.com", commitment:"confirmed",
-                    mints:[{address:"8QMYz8BiAcWZMLWnAn17Mj2WMQ6q6GcWBtSdzAovpump", tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001}] };
+    // 初始占位（会从 /status 覆盖）
+    const CHAIN = { 
+      cluster:"mainnet-beta",
+      rpcEndpoint:"https://api.mainnet-beta.solana.com",
+      commitment:"confirmed",
+      mints:[{ address:"8QMYz8BiAcWZMLWnAn17Mj2WMQ6q6GcWBtSdzAovpump", tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001 }],
+      decimals: 6,
+      treasury: null
+    };
     const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
+    const PRICE_UI = 10000; // 10,000 tokens (UI)
+    const TOKEN_PROGRAM_ID = new window.solanaWeb3.PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    const ASSOCIATED_TOKEN_PROGRAM_ID = new window.solanaWeb3.PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
     /* ===== Firebase ===== */
     const app = initializeApp(window.FIREBASE_CONFIG);
@@ -248,6 +258,7 @@
     /* ===== State & helpers ===== */
     let walletAddress = null;
     let walletType = null;
+    let currentProvider = null; // ✅ 保存已连接的 Solana provider（用于签名与发送）
 
     const short = (addr)=> addr ? (addr.startsWith('0x') ? addr.slice(0,6)+'…'+addr.slice(-4): addr.slice(0,4)+'…'+addr.slice(-4)) : '';
     const tail  = (addr,n=4)=> addr ? '…'+String(addr).slice(-n) : '';
@@ -262,6 +273,9 @@
       return typeof addr === 'string'
         && !addr.startsWith('0x')
         && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+    }
+    function isSolanaCapableProvider(p){
+      return !!p && (typeof p.signAndSendTransaction === 'function' || typeof p.signTransaction === 'function');
     }
 
     async function ensureParticipant(address,isHolder,cfg){
@@ -317,7 +331,6 @@
 
     /* ===== MetaMask 接入：Solana 原生优先 → 已装 Snap → EVM 回退 ===== */
 
-    /* 选出真正的 MetaMask 以太坊 provider（避免被其它扩展覆盖） */
     function getMetaMaskProvider(){
       const eth = window.ethereum;
       if (!eth) return null;
@@ -325,14 +338,12 @@
       if (Array.isArray(eth.providers)) return eth.providers.find(p => p && p.isMetaMask) || null;
       return null;
     }
-    /* 注入的 MetaMask Solana 提供者（像 Phantom 一样） */
     function getInjectedMetaMaskSolana(){
       if (window.solana?.isMetaMask) return window.solana;
       if (window.metamask?.solana)    return window.metamask.solana;
       return null;
     }
 
-    /** ✅ 仅“已安装”的 snap，避免强装 */
     async function getInstalledSnaps(){
       const mm = getMetaMaskProvider();
       if(!mm) return {};
@@ -354,17 +365,16 @@
       }
     }
 
-    /** 🔌 EVM 回退连接（eth_requestAccounts） */
     async function connectMetaMaskEVM(){
       const mm = getMetaMaskProvider();
       if(!mm) throw new Error('MetaMask not detected');
       const accounts = await mm.request({ method:'eth_requestAccounts' });
       const addr = accounts?.[0];
       if(!addr) throw new Error('No EVM account');
+      currentProvider = null; // EVM-only，无 Solana 能力
       return { address:String(addr), label:'MetaMask (EVM)' };
     }
 
-    /** 主连接逻辑：注入 → snap(已装) → EVM 回退 */
     async function connectMetaMaskSolana(){
       const mm = getMetaMaskProvider();
       if(!mm) throw new Error('MetaMask not detected');
@@ -396,11 +406,13 @@
             addr = accounts;
           }
           if (!addr) throw new Error('Unable to read Solana address');
+          // Snap 并不一定暴露 signAndSendTransaction，这里不直接保存为 provider
+          currentProvider = null;
           return { address:String(addr), label:'MetaMask (Solana · Snap)' };
         }
-      }catch(_){ /* ignore, go EVM fallback */ }
+      }catch(_){ /* ignore */ }
 
-      // C) EVM 回退（按你的要求：允许只要是 MetaMask 就能连）
+      // C) EVM 回退
       return await connectMetaMaskEVM();
     }
 
@@ -457,7 +469,6 @@
                 hideModal();
 
                 const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
-                // 只有 Solana 地址才做持有者判断；EVM 一律非持有者
                 const isSol = isSolanaAddress(walletAddress);
                 const isHolder = isSol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
 
@@ -507,6 +518,7 @@
 
         walletAddress = address;
         walletType    = label;
+        currentProvider = provider; // ✅ 记录 provider 用于后续签名
         hideModal();
 
         const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
@@ -521,29 +533,159 @@
 
     /* ===== Disconnect（简单处理） ===== */
     els.disconnectBtn.addEventListener('click', async ()=>{
-      walletAddress=null; walletType=null; await updateUI(false, CONFIG_DEFAULT);
+      walletAddress=null; walletType=null; currentProvider=null; await updateUI(false, CONFIG_DEFAULT);
     });
 
-    /* ===== DRAW ===== */
+    /* ===== /status 拉取后端链上参数 ===== */
+    async function loadServerChain(){
+      try{
+        const r=await fetch(`${API_BASE}/status`,{headers:{'Accept':'application/json'}});
+        if(!r.ok) return;
+        const j=await r.json().catch(()=>null);
+        if(!j) return;
+        if (j.mint) CHAIN.mints[0].address = j.mint;
+        if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
+        if (j.treasury) CHAIN.treasury = j.treasury;
+      }catch(e){ console.warn('loadServerChain warn:', e); }
+    }
+
+    /* ===== SPL Transfer Helpers ===== */
+    const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
+
+    function u64LE(nBig){
+      // nBig: BigInt
+      const b = new Uint8Array(8);
+      let x = BigInt(nBig);
+      for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; }
+      return b;
+    }
+
+    // derive ATA = findProgramAddressSync([owner, tokenProgram, mint], associatedTokenProgram)
+    function deriveATA(ownerPk, mintPk){
+      return PublicKey.findProgramAddressSync(
+        [ ownerPk.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mintPk.toBuffer() ],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )[0];
+    }
+
+    // Minimal createTransferCheckedInstruction (Token Program v3)
+    function createTransferCheckedInstruction(source, mint, destination, owner, amount, decimals){
+      const data = new Uint8Array(1 + 8 + 1);
+      data[0] = 12; // TransferChecked
+      data.set(u64LE(BigInt(amount)), 1); // amount (u64 LE)
+      data[1+8] = Number(decimals);       // decimals (u8)
+
+      const keys = [
+        { pubkey: source,      isSigner:false, isWritable:true  },
+        { pubkey: mint,        isSigner:false, isWritable:false },
+        { pubkey: destination, isSigner:false, isWritable:true  },
+        { pubkey: owner,       isSigner:true,  isWritable:false }
+      ];
+      return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
+    }
+
+    async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
+      if(!provider) throw new Error('No Solana provider available');
+      const connection = new Connection(CHAIN.rpcEndpoint, CHAIN.commitment);
+
+      const fromOwner = new PublicKey(fromAddress);
+      const toOwner   = new PublicKey(toOwnerAddress);
+      const mintPk    = new PublicKey(mintAddress);
+
+      const fromATA = deriveATA(fromOwner, mintPk);
+      const toATA   = deriveATA(toOwner, mintPk);
+
+      const feePayer = fromOwner;
+      const tx = new Transaction();
+      // 计算 base units
+      const amount = (BigInt(Math.trunc(amountUi)) * (10n ** BigInt(decimals)));
+
+      tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(CHAIN.commitment);
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = feePayer;
+
+      let sig;
+      if (typeof provider.signAndSendTransaction === 'function'){
+        const res = await provider.signAndSendTransaction(tx);
+        sig = res?.signature || res; // Phantom 返回 {signature}
+      } else if (typeof provider.signTransaction === 'function'){
+        const signed = await provider.signTransaction(tx);
+        const raw = signed.serialize();
+        sig = await connection.sendRawTransaction(raw, { skipPreflight:false });
+      } else {
+        throw new Error('Wallet cannot sign Solana transactions');
+      }
+
+      // 等待确认（confirmed）
+      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment);
+      return sig;
+    }
+
+    /* ===== DRAW（含扣款） ===== */
     async function performDraw(){
       if(!walletAddress) return;
+
+      // 读取远端 holder 配置与资格
       const cfg = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
-
-      // 只有 Solana 地址才做持有者规则；EVM 一律按非持有者
-      const sol = isSolanaAddress(walletAddress);
-      const isHolder = sol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
-
+      const isSol = isSolanaAddress(walletAddress);
+      const isHolder = isSol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
       const rem = await computeRemaining(walletAddress,isHolder,cfg);
       if(rem<=0){ els.result.textContent='No chances left.'; return; }
 
-      els.drawBtn.disabled=true; els.result.textContent='Drawing… ✨';
+      // 第一次免费：直接 /draw
+      const usedSoFar = Math.max(readUsedLocal(walletAddress), await readUsedFS(walletAddress));
+      const needPay = usedSoFar >= 1; // 第二次及以后需要扣费
+
+      // 不是 Solana 地址 或 provider 不具备 Solana 能力时，禁止付费抽
+      if (needPay){
+        if (!isSol) { els.result.textContent='Please connect a Solana wallet for paid draws.'; return; }
+        if (!isSolanaCapableProvider(currentProvider)) {
+          els.result.textContent='Current wallet cannot sign Solana transactions. Please use Phantom/Solflare/Backpack/etc.'; 
+          return;
+        }
+        if (!CHAIN.mints?.[0]?.address || !CHAIN.treasury){
+          els.result.textContent='Payment not configured. Please try again later.'; 
+          console.warn('Missing mint/treasury from /status');
+          return;
+        }
+      }
+
+      els.drawBtn.disabled=true; els.result.textContent= needPay ? 'Paying 10,000… ⏳' : 'Drawing… ✨';
       try{
-        const r = await fetch(`${API_BASE}/draw`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ wallet: walletAddress, clientSeed: crypto.randomUUID() }) });
+        let paySig = null;
+
+        // 付费路径：先转 SPL，再调用 /draw
+        if (needPay){
+          const sig = await sendSplTransferChecked({
+            provider: currentProvider,
+            fromAddress: walletAddress,
+            toOwnerAddress: CHAIN.treasury,
+            mintAddress: CHAIN.mints[0].address,
+            amountUi: PRICE_UI,
+            decimals: CHAIN.decimals ?? 6
+          });
+          paySig = String(sig);
+          els.result.textContent = 'Payment confirmed. Drawing… ✨';
+        }
+
+        const r = await fetch(`${API_BASE}/draw`, { 
+          method:'POST', 
+          headers:{'Content-Type':'application/json'}, 
+          body: JSON.stringify({ 
+            wallet: walletAddress, 
+            clientSeed: crypto.randomUUID(),
+            paySig: paySig || null
+          }) 
+        });
         const data = await r.json().catch(()=>null);
         if(!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+
         const prize = data.prize?.label || 'Prize';
         els.result.textContent = `You got: ${prize} ✨`;
-        const usedNow = readUsedLocal(walletAddress)+1;
+
+        const usedNow = usedSoFar + 1;
         writeUsedLocal(walletAddress, usedNow);
         await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
       }catch(e){
@@ -551,11 +693,19 @@
         els.result.textContent = `Draw failed: ${e?.message || e}`;
       }finally{
         const cfg2 = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
-        const isHolder2 = sol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg2 }) : false;
+        const isHolder2 = isSol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg2 }) : false;
         await updateUI(isHolder2, cfg2);
       }
     }
-    async function resetLocal(){ if(walletAddress){ writeUsedLocal(walletAddress,0); els.result.textContent='Local reset.'; const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT}); const sol=isSolanaAddress(walletAddress); const isHolder=sol?await resolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false; await updateUI(isHolder,cfg); } }
+    async function resetLocal(){ 
+      if(walletAddress){ 
+        writeUsedLocal(walletAddress,0); 
+        els.result.textContent='Local reset.'; 
+        const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT}); 
+        const isHolder=isSolanaAddress(walletAddress)?await resolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false; 
+        await updateUI(isHolder,cfg); 
+      } 
+    }
     els.drawBtn.addEventListener('click', performDraw);
     els.resetBtn.addEventListener('click', resetLocal);
 
@@ -593,10 +743,12 @@
 
     /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
+    await loadServerChain(); // 从后端覆盖 mint/treasury/decimals
     await updateGlowUIWithRetry();
     await updateUI(false, CONFIG_DEFAULT);
     await updateWinnersUI();
   </script>
 </body>
 </html>
+
 
