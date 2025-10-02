@@ -20,6 +20,8 @@
       appId: "1:483605028839:web:89804c881f445137536742",
       measurementId: "G-29ZD4V0DDJ"
     };
+    /* 可选：在外层页面或部署时注入 window.API_BASE 覆盖后端域名
+       例如：window.API_BASE = "https://你的后端.onrender.com"; */
   </script>
 
   <!-- solana web3 IIFE -->
@@ -197,7 +199,7 @@
              collection, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js";
 
     /* ===== Backend API ===== */
-    const API_BASE = "https://mooncake-1.onrender.com";
+    const API_BASE = (window.API_BASE && String(window.API_BASE)) || "https://mooncake-1.onrender.com";
 
     /* ===== UI refs ===== */
     const bootErr = document.getElementById('bootError');
@@ -232,13 +234,14 @@
       cluster:"mainnet-beta",
       rpcEndpoint:"https://api.mainnet-beta.solana.com",
       commitment:"confirmed",
-      mints:[{ address:"8QMYz8BiAcWZMLWnAn17Mj2WMQ6q6GcWBtSdzAovpump", tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001 }],
+      mints:[{ address:"", tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001 }],
       decimals:6,
       treasury:null
     };
 
     const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
-    const PRICE_UI = 10000;
+    // 将价格从 /config 读取（默认 10000）
+    let PRICE_UI = 10000;
 
     /* ===== Firebase ===== */
     const app = initializeApp(window.FIREBASE_CONFIG);
@@ -325,7 +328,7 @@
       return tips.join(' ');
     }
 
-    /* ===== 钱包检测 ===== */
+    /* ===== 钱包检测（保持不变） ===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
@@ -461,7 +464,7 @@
 
         const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
         if(!pk) throw new Error('No publicKey from wallet');
-        const address = (typeof pk.toBase58==='function') ? pk.toBase58() : String(pk);
+        const address = (typeof pk.toBase64==='function' && pk.toBase58) ? pk.toBase58() : String(pk);
 
         walletAddress = address;
         walletType    = label;
@@ -483,36 +486,45 @@
     /* ===== Disconnect ===== */
     els.disconnectBtn.addEventListener('click', async ()=>{ walletAddress=null; walletType=null; currentProvider=null; await updateUI(false, CONFIG_DEFAULT); });
 
-    /* ===== 后端 "/" 覆盖链参数，并在前端替换 RPC ===== */
+    /* ===== 后端 /config 覆盖链参数（关键修复） ===== */
     function pickFrontendRpc(url){
-      if (!url) return 'https://rpc.ankr.com/solana';
-      if (/api\.mainnet-beta\.solana\.com/i.test(url)) return 'https://rpc.ankr.com/solana';
+      if (!url) return 'https://solana.publicnode.com';            // 不再默认 Ankr，避免 403 黄条
       return url;
     }
     async function loadServerChain(){
       try{
-        const r=await fetch(`${API_BASE}/`,{headers:{'Accept':'application/json'}});
-        if(!r.ok) return;
-        const j=await r.json().catch(()=>null);
-        if(!j) return;
+        const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
+        if(!r.ok) throw new Error(`/config ${r.status}`);
+        const j=await r.json();
+
+        // 必要字段写回前端运行时
         if (j.mint) CHAIN.mints[0].address = j.mint;
         if (typeof j.decimals === 'number') CHAIN.decimals = j.decimals;
         if (j.treasury) CHAIN.treasury = j.treasury;
-        CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
-      }catch(e){ console.warn('loadServerChain warn:', e); }
+        if (j.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(j.rpc);
+        if (j.price) PRICE_UI = Number(j.price);
+
+        // 可见提示
+        console.log('[config]', j);
+        if (!CHAIN.mints[0].address || !CHAIN.treasury){
+          showBootError('Payment not configured on backend: missing mint or treasury. Draw will be free-only.');
+        }
+      }catch(e){ 
+        console.warn('loadServerChain warn:', e);
+        showBootError('Failed to load /config from backend. Buttons will stay disabled until backend is reachable.');
+      }
     }
 
-    /* ===== RPC 多路回退工具（发送阶段也可用） ===== */
+    /* ===== RPC 多路回退工具（保留；去掉 Ankr 优先项） ===== */
     const PUBLIC_RPCS = [
-      'https://rpc.ankr.com/solana',
       'https://solana.publicnode.com',
-      'https://solana-rpc.publicnode.com'
+      'https://solana-rpc.publicnode.com',
+      'https://api.mainnet-beta.solana.com'
     ];
     function buildRpcList(primary){
       const list = [];
-      if (primary && !/api\.mainnet-beta\.solana\.com/i.test(primary)) list.push(primary);
+      if (primary) list.push(primary);
       list.push(...PUBLIC_RPCS);
-      if (primary && /api\.mainnet-beta\.solana\.com/i.test(primary)) list.push(primary);
       // 去重
       const seen=new Set(); return list.filter(u=>{const k=(u||'').trim(); if(!k||seen.has(k)) return false; seen.add(k); return true;});
     }
@@ -535,13 +547,10 @@
       ];
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
-
     async function signAndSendViaWallet(tx){
-      // 直接让钱包补全 blockhash & feePayer 并广播（优先方案）
       const res = await currentProvider.signAndSendTransaction(tx);
       return res?.signature || res;
     }
-
     async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
       if(!provider) throw new Error('No Solana provider available');
 
@@ -556,23 +565,18 @@
       const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
 
-      // A) 优先：直接走钱包 SAS，不自己取 blockhash（避免 403）
+      // A) 优先：直接走钱包
       if (typeof provider.signAndSendTransaction === 'function'){
         try {
           const sig = await signAndSendViaWallet(tx);
           return String(sig);
         } catch (e) {
           const msg = String(e?.message||e||'');
-          // 某些钱包需要我们先填 blockhash，再试一次
-          if (!/blockhash/i.test(msg) && !/recent/i.test(msg)) {
-            // 非 blockhash 问题，直接抛出
-            throw e;
-          }
-          // 继续走 B 路径
+          if (!/blockhash/i.test(msg) && !/recent/i.test(msg)) throw e;
         }
       }
 
-      // B) 回退：我们自行取 blockhash（多 RPC 轮询），再按钱包能力发送
+      // B) 我们补充 blockhash，必要时自行广播
       const rpclist = buildRpcList(CHAIN.rpcEndpoint);
       let lastErr = null;
 
@@ -585,11 +589,9 @@
 
           let sig;
           if (typeof provider.signAndSendTransaction === 'function'){
-            // 让钱包发送（即使用它的网络），我们只负责补全 blockhash
             const res = await provider.signAndSendTransaction(tx);
             sig = res?.signature || res;
           } else if (typeof provider.signTransaction === 'function'){
-            // 我们来发送到当前 conn
             const signed = await provider.signTransaction(tx);
             const raw = signed.serialize();
             sig = await withTimeout(conn.sendRawTransaction(raw, { skipPreflight:false }), 4000);
@@ -624,17 +626,17 @@
       if (needPay){
         if (!isSol) { els.result.textContent='Please connect a Solana wallet for paid draws.'; return; }
         if (!isSolanaCapableProvider(currentProvider)) {
-          els.result.textContent='Current wallet cannot sign Solana transactions. Please use Phantom/Solflare/Backpack/etc.'; 
+          els.result.textContent='Current wallet cannot sign Solana transactions. Please use Phantom/Solflare/Backpack/etc.';
           return;
         }
         if (!CHAIN.mints?.[0]?.address || !CHAIN.treasury){
-          els.result.textContent='Payment not configured. Please try again later.'; 
-          console.warn('Missing mint/treasury from backend /');
+          els.result.textContent='Payment not configured. Please try again later.';
+          console.warn('Missing mint/treasury from backend /config');
           return;
         }
       }
 
-      els.drawBtn.disabled=true; els.result.textContent= needPay ? 'Paying 10,000… ⏳' : 'Drawing… ✨';
+      els.drawBtn.disabled=true; els.result.textContent= needPay ? `Paying ${PRICE_UI.toLocaleString()}… ⏳` : 'Drawing… ✨';
       try{
         let paySig = null;
 
@@ -651,10 +653,10 @@
           els.result.textContent = 'Payment confirmed. Drawing… ✨';
         }
 
-        const r = await fetch(`${API_BASE}/draw`, { 
-          method:'POST', 
-          headers:{'Content-Type':'application/json'}, 
-          body: JSON.stringify({ wallet: walletAddress, clientSeed: crypto.randomUUID(), paySig: paySig || null }) 
+        const r = await fetch(`${API_BASE}/draw`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ wallet: walletAddress, clientSeed: crypto.randomUUID(), paySig: paySig || null })
         });
         const data = await r.json().catch(()=>null);
         if(!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
@@ -674,14 +676,14 @@
         await updateUI(isHolder2, cfg2);
       }
     }
-    async function resetLocal(){ 
-      if(walletAddress){ 
-        writeUsedLocal(walletAddress,0); 
-        els.result.textContent='Local reset.'; 
-        const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT}); 
-        const isHolder=isSolanaAddress(walletAddress)?await safeResolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false; 
-        await updateUI(isHolder,cfg); 
-      } 
+    async function resetLocal(){
+      if(walletAddress){
+        writeUsedLocal(walletAddress,0);
+        els.result.textContent='Local reset.';
+        const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
+        const isHolder=isSolanaAddress(walletAddress)?await safeResolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false;
+        await updateUI(isHolder,cfg);
+      }
     }
     els.drawBtn.addEventListener('click', performDraw);
     els.resetBtn.addEventListener('click', resetLocal);
@@ -720,13 +722,14 @@
 
     /* ===== Boot ===== */
     const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
-    await loadServerChain();
+    await loadServerChain();              // << 从 /config 读取后端参数（关键）
     await updateGlowUIWithRetry();
     await updateUI(false, CONFIG_DEFAULT);
     await updateWinnersUI();
   </script>
 </body>
 </html>
+
 
 
 
