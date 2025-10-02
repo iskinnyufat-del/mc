@@ -1,8 +1,9 @@
 // holder-check.js
 // 作用：统一“是否持币 + 次数配置”
 // - 发币前：用 Firestore 的 config/draw（和可选的 whitelist/{address}）决定
-// - 发币后：优先走链上余额（根据 index.html 传入的 CHAIN 配置）
-// 加强版：多 RPC 回退 + 超时保护；403/-32052 自动切换到其他公共 RPC；记住上次可用 RPC
+// - 发币后：优先走链上余额（根据前端传入的 CHAIN 配置）
+// 加强版：多 RPC 回退 + 超时保护；403/-32052 自动切换公共 RPC；记住上次可用 RPC；
+//        至少用 2 个“健康 RPC”再判定不是持币者，降低误判。
 
 /* =========================
  * 远程配置：config/draw
@@ -86,7 +87,7 @@ function buildRpcList(chainConfig) {
   let lastGood = '';
   try { lastGood = localStorage.getItem(LS_KEY) || ''; } catch {}
 
-  // 公共回退优先 publicnode，Ankr 放后面（浏览器易 403）
+  // 公共回退优先 publicnode，Ankr 次之；官方 RPC 放最后（前端直连易限流）
   const publicFallbacks = [
     'https://solana.publicnode.com',
     'https://solana-rpc.publicnode.com',
@@ -98,7 +99,6 @@ function buildRpcList(chainConfig) {
     primaryA || primaryB,
     ...extras,
     ...publicFallbacks,
-    // 官方 API 放到最后（前端直连常见限流/CORS）
     'https://api.mainnet-beta.solana.com',
   ]).filter(Boolean);
 
@@ -126,6 +126,8 @@ async function checkAnyMintHold({ owner, chainConfig }) {
 
   const endpoints = buildRpcList(chainConfig);
   let lastErr = null;
+  let sawAnyHealthyRpc = false;
+  let healthyRpcCountTried = 0;
 
   for (const rpc of endpoints) {
     try {
@@ -136,14 +138,14 @@ async function checkAnyMintHold({ owner, chainConfig }) {
         if (!mint?.address) continue;
         const mintPk = new PublicKey(mint.address);
 
-        // 重要：filter 只能二选一，这里只用 mint 过滤
+        // 重要：getParsedTokenAccountsByOwner 的 filter 只能二选一，这里只用 mint 过滤
         const resp = await withTimeout(
-          connection.getParsedTokenAccountsByOwner(
-            ownerPk,
-            { mint: mintPk }
-          ),
+          connection.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }),
           2500
         );
+
+        // 只要能拿到 resp 就算健康 RPC
+        sawAnyHealthyRpc = true;
 
         let total = 0;
         for (const { account } of resp.value) {
@@ -156,9 +158,14 @@ async function checkAnyMintHold({ owner, chainConfig }) {
           return { ok: true, mint: mint.address, amount: total, rpcUsed: rpc };
         }
       }
-      // 该 RPC 正常返回但没命中任何 mint → 不是持有者（记住这个可用 RPC）
+
+      // 这个 RPC 正常但没查到余额：先记健康次数，至少试 2 个健康 RPC 再下结论
       rememberGoodRpc(cluster, rpc);
-      return { ok: false, rpcUsed: rpc };
+      healthyRpcCountTried += 1;
+      if (healthyRpcCountTried >= 2) {
+        return { ok: false, rpcUsed: rpc };
+      }
+      // 否则继续试下一个 RPC
     } catch (e) {
       lastErr = e;
       // 典型 403/-32052：继续尝试下一条
@@ -171,8 +178,8 @@ async function checkAnyMintHold({ owner, chainConfig }) {
     }
   }
 
-  // 所有 RPC 都失败了
-  if (lastErr) {
+  // 所有 RPC 都失败了（或没有健康 RPC）
+  if (!sawAnyHealthyRpc && lastErr) {
     console.warn('[holder-check] all RPC failed, fallback to config/whitelist:', lastErr);
   }
   return null;
@@ -185,13 +192,13 @@ export async function resolveIsHolder({ db, address, chainConfig, config }) {
   const addr = String(address || '');
   const isSol = !!addr && !addr.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
 
-  // 发币后优先链上
+  // 发币后优先走链上
   const hasMintConfigured = isSol && Array.isArray(chainConfig?.mints) && chainConfig.mints.some(m => !!m?.address);
   if (hasMintConfigured) {
     try {
       const r = await checkAnyMintHold({ owner: addr, chainConfig });
       if (r && typeof r.ok === 'boolean') return r.ok; // true/false 均可直接返回
-      // null 表示所有 RPC 都失败 → 走 fallback
+      // r === null 表示所有 RPC 都失败 → 走 fallback
     } catch (e) {
       console.warn('[holder-check] on-chain failed, fallback to config/whitelist:', e);
     }
