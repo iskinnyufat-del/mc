@@ -1,0 +1,601 @@
+<!DOCTYPE html> 
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MOONcake | Mid-Autumn Lucky Page</title>
+
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2240%22 fill=%22%23ffd166%22/></svg>">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Firebase config -->
+  <script>
+    window.FIREBASE_CONFIG = {
+      apiKey: "AIzaSyD7xOnDHnJdG5p0BoL4UR6gSohuL8a0ncE",
+      authDomain: "mooncake-c400c.firebaseapp.com",
+      projectId: "mooncake-c400c",
+      storageBucket: "mooncake-c400c.appspot.com",
+      messagingSenderId: "483605028839",
+      appId: "1:483605028839:web:89804c881f445137536742",
+      measurementId: "G-29ZD4V0DDJ"
+    };
+  </script>
+
+  <!-- 仅用于少量类型/兼容；不强依赖它注入 provider -->
+  <script src="https://unpkg.com/@solana/web3.js@1.95.3/lib/index.iife.min.js"></script>
+
+  <style>
+    :root{ --bg:#0a0a0a; --panel:#111; --card:#141414; --text:#f6f7fb; --muted:#b8bbc7; --brand:#ffd166; --line:rgba(255,255,255,.10); --good:#a7f3d0; --warn:#fde68a; --bad:#fca5a5; --pill-bg: rgba(255,209,102,.16) }
+    *{box-sizing:border-box} html,body{height:100%}
+    body{ margin:0; background: radial-gradient(1200px 600px at 80% -10%, #1a1a1a 0%, #0a0a0a 45%, #000 100%); color:var(--text);
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    a{color:var(--brand);text-decoration:none}
+    .container{max-width:980px;margin:0 auto;padding:24px}
+    .header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+    .brand{display:flex;align-items:center;gap:10px}
+    .brand .dot{width:10px;height:10px;border-radius:999px;background:var(--brand);box-shadow:0 0 18px var(--brand)}
+    .brand h1{margin:0;font-size:14px;font-weight:700;letter-spacing:.3px;color:var(--muted)}
+    .wallet{display:flex;align-items:center;gap:10px}
+    .btn{ border:1px solid var(--line); background:linear-gradient(180deg,#1b1b1b,#121212); color:var(--text);
+      padding:10px 14px;border-radius:12px;cursor:pointer;font-weight:700;letter-spacing:.2px; transition:transform .15s ease, box-shadow .2s ease, background .2s ease; }
+    .btn:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(0,0,0,.35)}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:linear-gradient(180deg,#ffd166,#eeb94d);color:#000;border:none}
+    .btn-ghost{background:transparent;border:1px solid var(--line);}
+    .note{font-size:12px;color:var(--muted)}
+    .title-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;margin:22px 0 14px}
+    .title-logo{width:64px;height:64px;object-fit:contain;filter:drop-shadow(0 8px 30px rgba(255,209,102,.25))}
+    .title{font-size:28px;margin:0;font-weight:800;text-align:center}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01));border:1px solid var(--line);backdrop-filter:blur(6px);border-radius:18px;padding:18px}
+    .section{margin:16px 0}.section h2{margin:0 0 10px;font-size:16px}
+    .about-list{display:grid;grid-template-columns:1fr;gap:10px;margin:8px 0 0}
+    .about-item{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.02)}
+    .about-item .num{min-width:28px;height:28px;border-radius:9px;background:var(--pill-bg);display:inline-flex;align-items:center;justify-content:center;color:#000;font-weight:800}
+    .draw-title{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+    .draw-icon{width:28px;height:28px;object-fit:contain}
+    .draw{display:grid;grid-template-columns:1fr;gap:10px}
+    .stat{display:flex;align-items:center;justify-content:space-between;border:1px dashed var(--line);padding:10px 12px;border-radius:12px;color:var(--muted)}
+    .draw-actions{display:flex;gap:10px;flex-wrap:wrap}
+    .result{margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:12px;min-height:48px;display:flex;align-items:center}
+    #bootError{display:none;margin:8px auto 0;padding:10px 12px;max-width:980px;border:1px solid #ffb4b4;background:#2a1212;color:#ffdada;border-radius:10px;font-size:12px;white-space:pre-wrap}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}
+    .modal.active{display:flex}
+    .modal-card{background:#141414;border:1px solid var(--line);border-radius:16px;width:100%;max-width:480px;padding:18px}
+    .modal-card h2{margin:0 0 12px;font-size:18px}
+    .wallet-list{display:flex;flex-direction:column;gap:10px}
+    .wallet-btn{display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:#1d1d1d;color:#fff;cursor:pointer}
+    .wallet-btn:hover{background:#232323}
+    .badge{margin-left:auto;font-size:12px;color:var(--muted)}
+    .help{font-size:12px;color:var(--muted);margin-top:8px}
+    .odds{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
+    .odd-row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.02)}
+    .pill{padding:4px 10px;border-radius:999px;background:var(--pill-bg);color:var(--brand);font-size:12px;font-weight:800}
+    .fine{font-size:12px;color:var(--muted)}
+    .winners{display:grid;grid-template-columns:1fr;gap:8px}
+    .winner-item{display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02)}
+    .addr{font-family:ui-monospace,Menlo,Consolas,monospace;opacity:.95}
+    .prize{font-weight:700}
+    .center{text-align:center}.error{color:var(--bad)}
+  </style>
+</head>
+<body>
+  <div id="bootError"></div>
+
+  <div class="container">
+    <header class="header">
+      <div class="brand"><span class="dot"></span><h1>Mid-Autumn</h1></div>
+      <div class="wallet">
+        <span id="walletLabel" class="note">Not connected</span>
+        <button id="connectBtn" class="btn btn-primary">Connect Wallet</button>
+        <button id="disconnectBtn" class="btn btn-ghost" title="Disconnect current wallet" style="display:none;">Disconnect</button>
+      </div>
+    </header>
+
+    <div class="title-wrap">
+      <img src="./assets/mooncake.png" alt="MOONcake logo" class="title-logo">
+      <h2 class="title">MOONcake</h2>
+    </div>
+
+    <p class="center" style="color:var(--muted); margin:4px 0 18px;">
+      A tiny lucky page for Solana friends • Holders get more chances 🍀
+    </p>
+
+    <!-- About -->
+    <section class="section card" id="about">
+      <h2>About the Project</h2>
+      <div class="about-list">
+        <div class="about-item"><div class="num">1</div><p><strong>Full-MOON airdrops.</strong> On every full MOON, we randomly airdrop <em>Lucky Tokens</em> to holders.<br><span class="note">(Snapshot & rules will be announced before each full MOON.)</span></p></div>
+        <div class="about-item"><div class="num">2</div><p><strong>Community when ready.</strong> Once a healthy number of holders is reached, we’ll open a Telegram community.<br><span class="note">(We grow sustainably: quality vibes over vanity numbers.)</span></p></div>
+        <div class="about-item"><div class="num">3</div><p><strong>Delightful merch drops.</strong> Expect seasonal goodies — MOON-themed pieces and playful collabs.<br><span class="note">(Details and claim mechanics will be posted in advance.)</span></p></div>
+      </div>
+    </section>
+
+    <!-- Draw -->
+    <section class="section card" id="draw">
+      <div class="draw-title">
+        <img src="./assets/happy.png" alt="draw icon" class="draw-icon">
+        <h2>Lucky Draw</h2>
+      </div>
+      <div class="draw">
+        <div class="stat"><span>Eligibility</span><span id="eligibility">Chances</span></div>
+        <div class="stat"><span>Remaining chances (this wallet)</span><span id="remaining">–</span></div>
+        <div class="draw-actions">
+          <button id="drawBtn" class="btn" disabled>Draw Now</button>
+          <button id="resetBtn" class="btn" title="Local cache only">Reset (local)</button>
+        </div>
+        <div id="result" class="result">Result will appear here ✨</div>
+        <p class="note" id="holderNote">Token TBA — holder check runs via whitelist until the SPL mint is live.</p>
+      </div>
+    </section>
+
+    <!-- Odds -->
+    <section class="section card" id="draw-info">
+      <h2>How it works</h2>
+      <div class="tips">
+        <div class="ok">• First draw is <strong id="firstFreeTag">FREE</strong>. After that, each draw costs <strong id="costPerDraw">10,000 tokens</strong>.</div>
+        <div>• Every <strong id="burnEvery">100</strong> draws, we <strong id="burnAmount">burn 100,000 tokens</strong> from the creator treasury.</div>
+        <div class="fine">• Displayed odds are for illustration; actual drawing runs on server rules.</div>
+      </div>
+      <div class="odds" id="oddsBox">
+        <div class="odd-row"><span class="label"><span class="pill">5%</span> MOONcake</span><span class="fine"></span></div>
+        <div class="odd-row"><span class="label"><span class="pill">70%</span> Better luck next time</span><span class="fine"></span></div>
+        <div class="odd-row"><span class="label"><span class="pill">20%</span> 10k tokens</span><span class="fine"></span></div>
+        <div class="odd-row"><span class="label"><span class="pill">3%</span> 50k tokens</span><span class="fine"></span></div>
+        <div class="odd-row"><span class="label"><span class="pill">2%≤</span> 100k tokens</span><span class="fine"></span></div>
+        <div class="odd-row"><span class="label"><span class="pill">1%≤</span> Random: 1 SOL / 1 BTC / 1 ETH</span><span class="fine"></span></div>
+      </div>
+      <p class="fine" style="margin-top:8px;">* UI shows promo odds; real odds are server-side and may adjust dynamically.</p>
+    </section>
+
+    <!-- Latest winners -->
+    <section class="section card" id="latest-winners">
+      <h2>Latest Winners (last 5)</h2>
+      <div id="winnersList" class="winners"><div class="fine">Loading…</div></div>
+      <p class="fine">Only shows wallet tail & prize for privacy.</p>
+    </section>
+
+    <!-- Global counter -->
+    <section class="section card" id="moonglow-global">
+      <h2>🌕 MOONGlow Points (Global)</h2>
+      <p class="note">Every visit adds a little more MOONlight — this number is shared by everyone ✨</p>
+      <div id="moonglowGlobalCounter" class="center" style="font-size:22px;font-weight:800;color:var(--brand)">…</div>
+      <div id="moonglowError" class="center error" style="min-height:16px"></div>
+    </section>
+
+    <p class="note center" style="margin-top:16px;">
+      Welcome anyone with ideas to join us • Contact:
+      <a href="mailto:mooncakesender@gmail.com">mooncakesender@gmail.com</a>
+    </p>
+  </div>
+
+  <!-- Wallet modal -->
+  <div id="walletModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <h2 id="modalTitle" style="margin:0;">Select a Wallet</h2>
+        <button id="refreshWalletsBtn" class="btn btn-ghost">Refresh</button>
+      </div>
+      <div id="envWarn" class="help"></div>
+      <div id="walletList" class="wallet-list" style="margin-top:6px;"></div>
+      <div class="help">
+        Tip: If MetaMask is installed but shows EVM only, open <b>MetaMask → Settings → Experimental → Enable Solana</b> (or allow the Solana Snap) and return here, then click Refresh.
+      </div>
+      <button id="closeModalBtn" class="btn" style="width:100%; margin-top:12px">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Display-only config -->
+  <script id="displayConfig" type="application/json">
+  {"pricing":{"firstFree":true,"costPerDrawUi":10000},"burn":{"everyDraws":100,"burnAmountUi":100000}}
+  </script>
+
+  <!-- Main script -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, increment, serverTimestamp,
+             collection, getDocs, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-lite.js";
+
+    /* ===== Backend API ===== */
+    const API_BASE = "https://mooncake-1.onrender.com"; // ← 改成你的后端域名
+
+    /* ===== UI refs ===== */
+    const bootErr = document.getElementById('bootError');
+    const els = {
+      connectBtn: document.getElementById('connectBtn'),
+      disconnectBtn: document.getElementById('disconnectBtn'),
+      walletLabel: document.getElementById('walletLabel'),
+      eligibility: document.getElementById('eligibility'),
+      remaining: document.getElementById('remaining'),
+      drawBtn: document.getElementById('drawBtn'),
+      resetBtn: document.getElementById('resetBtn'),
+      result: document.getElementById('result'),
+      glowGlobal: document.getElementById('moonglowGlobalCounter'),
+      glowError: document.getElementById('moonglowError'),
+      holderNote: document.getElementById('holderNote'),
+      winnersList: document.getElementById('winnersList'),
+      modal: document.getElementById('walletModal'),
+      walletList: document.getElementById('walletList'),
+      closeModalBtn: document.getElementById('closeModalBtn'),
+      envWarn: document.getElementById('envWarn'),
+      refreshWalletsBtn: document.getElementById('refreshWalletsBtn')
+    };
+    function showBootError(msg){ bootErr.style.display='block'; bootErr.textContent=msg; console.error('[BOOT]', msg); }
+
+    /* ===== Activity & chain ===== */
+    const ACTIVITY_ID = 'mid-autumn-2025';
+    const CHAIN = { cluster:"mainnet-beta", rpcEndpoint:"https://api.mainnet-beta.solana.com", commitment:"confirmed",
+                    mints:[{address:null, tokenProgram:"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", minHoldUiAmount:0.000001}] };
+    const CONFIG_DEFAULT = { holderChances:3, nonHolderChances:1 };
+
+    /* ===== Firebase ===== */
+    const app = initializeApp(window.FIREBASE_CONFIG);
+    const db  = getFirestore(app);
+
+    /* ===== holder-check (存在则用) ===== */
+    let loadRemoteConfig, resolveIsHolder, allowedChances;
+    try {
+      const m = await import('./holder-check.js');
+      loadRemoteConfig = m.loadRemoteConfig;
+      resolveIsHolder  = m.resolveIsHolder;
+      allowedChances   = m.allowedChances;
+    } catch {
+      loadRemoteConfig = async () => ({ ...CONFIG_DEFAULT });
+      resolveIsHolder  = async () => false;
+      allowedChances   = (isHolder, cfg) => isHolder ? (cfg?.holderChances ?? 3) : (cfg?.nonHolderChances ?? 1);
+    }
+
+    /* ===== State & helpers ===== */
+    let walletAddress = null;
+    let walletType = null;
+
+    const short = (addr)=> addr ? (addr.startsWith('0x') ? addr.slice(0,6)+'…'+addr.slice(-4): addr.slice(0,4)+'…'+addr.slice(-4)) : '';
+    const tail  = (addr,n=4)=> addr ? '…'+String(addr).slice(-n) : '';
+    const partDoc = (address)=> doc(db,'activities',ACTIVITY_ID,'participants',String(address).toLowerCase());
+    const localKey= (addr)=> `draw:${ACTIVITY_ID}:${String(addr).toLowerCase()}`;
+    const readUsedLocal =(addr)=>{ try{ return Number(JSON.parse(localStorage.getItem(localKey(addr)))?.used||0);}catch{return 0;} };
+    const writeUsedLocal=(addr,used)=> localStorage.setItem(localKey(addr), JSON.stringify({used,ts:Date.now()}));
+    function allowedChancesLocal(isHolder,cfg){ return allowedChances(isHolder,cfg); }
+
+    /* 判断地址是否为 Solana（Base58 32–44，且不以 0x 开头） */
+    function isSolanaAddress(addr){
+      return typeof addr === 'string'
+        && !addr.startsWith('0x')
+        && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
+    }
+
+    async function ensureParticipant(address,isHolder,cfg){
+      try{
+        const ref = partDoc(address);
+        const snap = await getDoc(ref);
+        if (!snap.exists()){
+          await setDoc(ref,{ address:String(address).toLowerCase(), isHolder, used:0, allowed:allowedChancesLocal(isHolder,cfg),
+            createdAt:serverTimestamp(), updatedAt:serverTimestamp(), walletType }, { merge:true });
+        }
+      }catch(e){ console.warn('ensureParticipant warn:', e); }
+    }
+    async function readUsedFS(address){ try{ const s=await getDoc(partDoc(address)); return s.exists()?Number(s.data().used||0):0; }catch{return 0;} }
+    async function writeUsedFS(address,used,lastPrize=null,isHolder=false,cfg=CONFIG_DEFAULT){
+      try{ await setDoc(partDoc(address),{ address:String(address).toLowerCase(), isHolder, used, allowed:allowedChancesLocal(isHolder,cfg), lastPrize, updatedAt:serverTimestamp(), walletType },{merge:true}); }
+      catch(e){ console.warn('writeUsedFS warn:', e); }
+    }
+    async function computeRemaining(address,isHolder,cfg){
+      try{
+        const usedFS=await readUsedFS(address);
+        const usedLocal=readUsedLocal(address);
+        const used=Math.max(usedFS,usedLocal);
+        if (used>usedFS) await writeUsedFS(address,used,null,isHolder,cfg);
+        return Math.max(0, allowedChancesLocal(isHolder,cfg)-used);
+      }catch(e){ console.warn('computeRemaining failed:', e); return 1; }
+    }
+    async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
+      els.walletLabel.textContent = walletAddress ? `${short(walletAddress)}${walletType?' · '+walletType:''}` : 'Not connected';
+      els.disconnectBtn.style.display = walletAddress ? 'inline-flex' : 'none';
+      if (!walletAddress){ els.remaining.textContent='–'; els.drawBtn.disabled=true; els.eligibility.textContent='Chances: –'; return; }
+      const rem = await computeRemaining(walletAddress,isHolder,cfg);
+      els.remaining.textContent = String(rem);
+      els.drawBtn.disabled = rem<=0;
+      els.eligibility.textContent = `Chances: ${rem}`;
+      const hasMint = Array.isArray(CHAIN.mints)&&CHAIN.mints[0]?.address; els.holderNote.style.display = hasMint?'none':'block';
+    }
+
+    /* ===== 环境提示 ===== */
+    function envCheck(){
+      const tips=[];
+      const httpsOk = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
+      if(!httpsOk) tips.push('Use HTTPS (or localhost).');
+      if(window.top!==window.self) tips.push('Open in a top-level tab (not in an iframe).');
+      return tips.join(' ');
+    }
+
+    /* ===== 传统 Solana 钱包检测 ===== */
+    function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
+    function detectSolflare(){ return (window.solflare || null); }
+    function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
+    function detectOKX(){ return (window.okxwallet?.solana || null); }
+    function detectMagicEden(){ return (window.magicEden?.solana || null); }
+
+    /* ===== MetaMask 接入：Solana 原生优先 → 已装 Snap → EVM 回退 ===== */
+
+    /* 选出真正的 MetaMask 以太坊 provider（避免被其它扩展覆盖） */
+    function getMetaMaskProvider(){
+      const eth = window.ethereum;
+      if (!eth) return null;
+      if (eth.isMetaMask) return eth;
+      if (Array.isArray(eth.providers)) return eth.providers.find(p => p && p.isMetaMask) || null;
+      return null;
+    }
+    /* 注入的 MetaMask Solana 提供者（像 Phantom 一样） */
+    function getInjectedMetaMaskSolana(){
+      if (window.solana?.isMetaMask) return window.solana;
+      if (window.metamask?.solana)    return window.metamask.solana;
+      return null;
+    }
+
+    /** ✅ 仅“已安装”的 snap，避免强装 */
+    async function getInstalledSnaps(){
+      const mm = getMetaMaskProvider();
+      if(!mm) return {};
+      try { return await mm.request({ method:'wallet_getSnaps' }); }
+      catch { return {}; }
+    }
+    function pickSolanaSnapIdFrom(snaps){
+      for (const s of Object.values(snaps || {})) {
+        if (/solana/i.test(s?.id || '')) return s.id;
+      }
+      return null;
+    }
+    async function invokeSnap(snapId, method, params = {}){
+      const mm = getMetaMaskProvider(); if(!mm) throw new Error('MetaMask not detected');
+      try {
+        return await mm.request({ method:'wallet_invokeSnap', params:{ snapId, request:{ method, params } } });
+      } catch (_) {
+        return await mm.request({ method:'wallet_invokeSnap', params:[snapId, { method, params }] });
+      }
+    }
+
+    /** 🔌 EVM 回退连接（eth_requestAccounts） */
+    async function connectMetaMaskEVM(){
+      const mm = getMetaMaskProvider();
+      if(!mm) throw new Error('MetaMask not detected');
+      const accounts = await mm.request({ method:'eth_requestAccounts' });
+      const addr = accounts?.[0];
+      if(!addr) throw new Error('No EVM account');
+      return { address:String(addr), label:'MetaMask (EVM)' };
+    }
+
+    /** 主连接逻辑：注入 → snap(已装) → EVM 回退 */
+    async function connectMetaMaskSolana(){
+      const mm = getMetaMaskProvider();
+      if(!mm) throw new Error('MetaMask not detected');
+
+      // A) 注入式 Solana（最优先）
+      const injected = getInjectedMetaMaskSolana();
+      if (injected){
+        const res = await connectSolanaProvider('MetaMask (Solana)', injected);
+        return res;
+      }
+
+      // B) Snap（仅当已安装时）
+      try{
+        const snaps = await getInstalledSnaps();
+        const snapId = pickSolanaSnapIdFrom(snaps);
+        if (snapId){
+          const methods = ['getAccounts','getAccount','solana_getAccounts'];
+          let accounts = null, lastErr = null;
+          for (const m of methods){
+            try { const r = await invokeSnap(snapId,m); if(r){ accounts=r; break; } } catch(e){ lastErr = e; }
+          }
+          if (!accounts) throw lastErr || new Error('No accounts from Solana Snap');
+
+          let addr = null;
+          if (Array.isArray(accounts) && accounts.length) {
+            const first = accounts[0];
+            addr = typeof first === 'string' ? first : (first?.address || first?.publicKey || null);
+          } else if (typeof accounts === 'string') {
+            addr = accounts;
+          }
+          if (!addr) throw new Error('Unable to read Solana address');
+          return { address:String(addr), label:'MetaMask (Solana · Snap)' };
+        }
+      }catch(_){ /* ignore, go EVM fallback */ }
+
+      // C) EVM 回退（按你的要求：允许只要是 MetaMask 就能连）
+      return await connectMetaMaskEVM();
+    }
+
+    /* ===== 钱包列表（异步渲染，含 MetaMask 状态） ===== */
+    const WALLET_DEFS = [
+      { key:'phantom',   label:'Phantom',    detect:()=>detectPhantom(),   install:'https://phantom.app/' },
+      { key:'solflare',  label:'Solflare',   detect:()=>detectSolflare(),  install:'https://solflare.com/' },
+      { key:'backpack',  label:'Backpack',   detect:()=>detectBackpack(),  install:'https://backpack.app/' },
+      { key:'okx',       label:'OKX Wallet', detect:()=>detectOKX(),       install:'https://www.okx.com/web3' },
+      { key:'magiceden', label:'Magic Eden', detect:()=>detectMagicEden(), install:'https://magiceden.io/wallet' },
+      { key:'metamask',  label:'MetaMask',   detect:'metamask',            install:'https://metamask.io/' }
+    ];
+
+    function providerConnectButton(label, provider){
+      const btn = document.createElement('button');
+      btn.className = 'wallet-btn';
+      btn.innerHTML = `<span>💠</span><span>${label}</span><span class="badge">Detected</span>`;
+      btn.addEventListener('click', ()=> connectSolanaProvider(label, provider));
+      return btn;
+    }
+
+    async function renderWalletList(){
+      els.envWarn.textContent = envCheck();
+      els.walletList.innerHTML = '';
+
+      for (const def of WALLET_DEFS){
+        if (def.detect === 'metamask'){
+          const hasMM = !!getMetaMaskProvider();
+          const btn = document.createElement('button');
+          btn.className = 'wallet-btn';
+
+          if (!hasMM){
+            btn.innerHTML = `<span>🦊</span><span>${def.label}</span><span class="badge">Not installed</span>`;
+            btn.disabled = false;
+            btn.addEventListener('click', ()=> window.open(def.install,'_blank'));
+          } else {
+            // 标识：Native / Snap / EVM only
+            let badge = 'EVM only';
+            try{
+              if (getInjectedMetaMaskSolana()) badge = 'Solana';
+              else {
+                const snaps = await getInstalledSnaps();
+                if (pickSolanaSnapIdFrom(snaps)) badge = 'Solana (Snap)';
+              }
+            }catch{}
+            btn.innerHTML = `<span>🦊</span><span>${def.label}</span><span class="badge">${badge}</span>`;
+            btn.disabled = false;
+
+            btn.addEventListener('click', async ()=>{
+              try{
+                const res = await connectMetaMaskSolana();
+                walletAddress = res.address;
+                walletType    = res.label;
+                hideModal();
+
+                const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
+                // 只有 Solana 地址才做持有者判断；EVM 一律非持有者
+                const isSol = isSolanaAddress(walletAddress);
+                const isHolder = isSol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
+
+                await ensureParticipant(walletAddress, isHolder, cfg);
+                await updateUI(isHolder, cfg);
+              }catch(e){
+                console.error('[MetaMask] connect failed:', e);
+                alert('MetaMask connect failed: ' + (e?.message||e));
+              }
+            });
+          }
+          els.walletList.appendChild(btn);
+          continue;
+        }
+
+        // 其他 Solana 钱包
+        const provider = def.detect();
+        if (provider){
+          els.walletList.appendChild(providerConnectButton(def.label, provider));
+        } else {
+          const btn = document.createElement('button');
+          btn.className = 'wallet-btn';
+          btn.innerHTML = `<span>💠</span><span>${def.label}</span><span class="badge">Not installed</span>`;
+          btn.disabled = false;
+          btn.addEventListener('click', ()=> window.open(def.install,'_blank'));
+          els.walletList.appendChild(btn);
+        }
+      }
+    }
+
+    function showModal(){ renderWalletList(); els.modal.classList.add('active'); els.modal.setAttribute('aria-hidden','false'); }
+    function hideModal(){ els.modal.classList.remove('active'); els.modal.setAttribute('aria-hidden','true'); }
+    els.connectBtn.addEventListener('click', showModal);
+    els.closeModalBtn.addEventListener('click', hideModal);
+    els.refreshWalletsBtn.addEventListener('click', renderWalletList);
+
+    /* ===== 传统 provider 连接（Phantom / Solflare / Backpack / OKX / MagicEden） ===== */
+    async function connectSolanaProvider(label, provider){
+      try{
+        let resp=null;
+        try{ resp = await provider.connect?.({ onlyIfTrusted:true }); }catch{}
+        if(!resp && provider.connect) resp = await provider.connect();
+
+        const pk = resp?.publicKey || provider.publicKey || resp?.accounts?.[0];
+        if(!pk) throw new Error('No publicKey from wallet');
+        const address = (typeof pk.toBase58==='function') ? pk.toBase58() : String(pk);
+
+        walletAddress = address;
+        walletType    = label;
+        hideModal();
+
+        const cfg = await loadRemoteConfig(db, { defaults: CONFIG_DEFAULT }) ?? { ...CONFIG_DEFAULT };
+        const isHolder = await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg });
+        await ensureParticipant(walletAddress, isHolder, cfg);
+        await updateUI(isHolder, cfg);
+      }catch(e){
+        console.error(`[${label}] connect error:`, e);
+        alert(`${label} connect failed: ${e?.message || e}`);
+      }
+    }
+
+    /* ===== Disconnect（简单处理） ===== */
+    els.disconnectBtn.addEventListener('click', async ()=>{
+      walletAddress=null; walletType=null; await updateUI(false, CONFIG_DEFAULT);
+    });
+
+    /* ===== DRAW ===== */
+    async function performDraw(){
+      if(!walletAddress) return;
+      const cfg = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
+
+      // 只有 Solana 地址才做持有者规则；EVM 一律按非持有者
+      const sol = isSolanaAddress(walletAddress);
+      const isHolder = sol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg }) : false;
+
+      const rem = await computeRemaining(walletAddress,isHolder,cfg);
+      if(rem<=0){ els.result.textContent='No chances left.'; return; }
+
+      els.drawBtn.disabled=true; els.result.textContent='Drawing… ✨';
+      try{
+        const r = await fetch(`${API_BASE}/draw`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ wallet: walletAddress, clientSeed: crypto.randomUUID() }) });
+        const data = await r.json().catch(()=>null);
+        if(!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+        const prize = data.prize?.label || 'Prize';
+        els.result.textContent = `You got: ${prize} ✨`;
+        const usedNow = readUsedLocal(walletAddress)+1;
+        writeUsedLocal(walletAddress, usedNow);
+        await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
+      }catch(e){
+        console.error('draw error:', e);
+        els.result.textContent = `Draw failed: ${e?.message || e}`;
+      }finally{
+        const cfg2 = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
+        const isHolder2 = sol ? await resolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg2 }) : false;
+        await updateUI(isHolder2, cfg2);
+      }
+    }
+    async function resetLocal(){ if(walletAddress){ writeUsedLocal(walletAddress,0); els.result.textContent='Local reset.'; const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT}); const sol=isSolanaAddress(walletAddress); const isHolder=sol?await resolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false; await updateUI(isHolder,cfg); } }
+    els.drawBtn.addEventListener('click', performDraw);
+    els.resetBtn.addEventListener('click', resetLocal);
+
+    /* ===== MOONGlow ===== */
+    const glowRef = doc(db, 'stats', 'moonglow');
+    async function ensureGlow(){ const s=await getDoc(glowRef); if(!s.exists()){ await setDoc(glowRef,{ total:0, updatedAt:serverTimestamp() },{merge:true}); } }
+    async function incGlowOnce(){ await setDoc(glowRef,{ total:increment(1), updatedAt:serverTimestamp() },{merge:true}); }
+    async function readGlow(){ const s=await getDoc(glowRef); return s.exists()?Number(s.data().total||0):0; }
+    async function updateGlowUIWithRetry(){
+      els.glowError.textContent=''; els.glowGlobal.textContent='…';
+      try{ await ensureGlow(); await incGlowOnce(); els.glowGlobal.textContent=String(await readGlow()); }
+      catch(e){ console.error('[MOONGlow] failed:', e); els.glowGlobal.textContent='—'; els.glowError.textContent='Global counter failed.'; }
+    }
+
+    /* ===== Winners（后端优先，其次 Firestore） ===== */
+    async function fetchLatestWinners(){
+      try{
+        const r=await fetch(`${API_BASE}/draws/latest?limit=5`,{headers:{'Accept':'application/json'}});
+        if(r.ok){ const j=await r.json(); if(j?.ok && Array.isArray(j.draws)){ const a=j.draws.map(x=>({address:x.wallet||x.address, prizeLabel:x.prizeLabel||(x.prize&&x.prize.label), type:(x.type||'').toUpperCase()})).filter(it=>it.type && it.type!=='NONE'); if(a.length) return a.slice(0,5); } }
+      }catch(_){}
+      try{
+        const drawsColl = collection(db,'activities',ACTIVITY_ID,'draws');
+        const qSnap = await getDocs(query(drawsColl, orderBy('timestamp','desc'), limit(20)));
+        const items = (qSnap?.docs||[]).map(d=>({id:d.id,...d.data()}));
+        return items.map(d=>({address:d.wallet||d.address, prizeLabel:d.prizeLabel||(d.prize&&d.prize.label), type:(d.type||'').toUpperCase()}))
+                    .filter(it=>it.address && it.type!=='NONE').slice(0,5);
+      }catch(e){ console.error('[Winners] read failed:', e); return null; }
+    }
+    function renderWinners(list){
+      const box=els.winnersList;
+      if(!Array.isArray(list)||!list.length){ box.innerHTML='<div class="fine">No winners yet.</div>'; return; }
+      box.innerHTML=''; list.forEach(w=>{ const li=document.createElement('div'); li.className='winner-item'; li.innerHTML=`<span class="addr">${tail(w.address||'',4)}</span><span class="prize">${w.prizeLabel||'Prize'}</span>`; box.appendChild(li); });
+    }
+    async function updateWinnersUI(){ els.winnersList.innerHTML='<div class="fine">Loading…</div>'; const list=await fetchLatestWinners(); renderWinners(list||[]); }
+
+    /* ===== Boot ===== */
+    const tips = envCheck(); if(tips) console.warn('[ENV]', tips);
+    await updateGlowUIWithRetry();
+    await updateUI(false, CONFIG_DEFAULT);
+    await updateWinnersUI();
+  </script>
+</body>
+</html>
