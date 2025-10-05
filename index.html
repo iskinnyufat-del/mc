@@ -9,7 +9,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
-  <!-- Firebase config -->
+  <!-- 可选：在这里手动覆盖后端配置（当后端暂时返回不到时用） -->
+  <script>
+    // 覆盖后端地址（可选）
+    // window.API_BASE = "https://你的后端域名或Render服务域名";
+    // 覆盖 mint / decimals / treasury（可选）
+    // window.MINT_OVERRIDE = "你的SPL代币mint地址";
+    // window.DECIMALS_OVERRIDE = 6;
+    // window.TREASURY_OVERRIDE = "你的资金库(发放者)的钱包地址";
+  </script>
+
+  <!-- Firebase config（按你的项目保持不变） -->
   <script>
     window.FIREBASE_CONFIG = {
       apiKey: "AIzaSyD7xOnDHnJdG5p0BoL4UR6gSohuL8a0ncE",
@@ -20,7 +30,6 @@
       appId: "1:483605028839:web:89804c881f445137536742",
       measurementId: "G-29ZD4V0DDJ"
     };
-    // 可选: 在外层注入 window.API_BASE 覆盖后端域名
   </script>
 
   <!-- solana web3 IIFE -->
@@ -143,7 +152,6 @@
         <div class="odd-row"><span class="label"><span class="pill">20%</span> 10k tokens</span><span class="fine"></span></div>
         <div class="odd-row"><span class="label"><span class="pill">3%</span> 50k tokens</span><span class="fine"></span></div>
         <div class="odd-row"><span class="label"><span class="pill">2%≤</span> 100k tokens</span><span class="fine"></span></div>
-        <div class="odd-row"><span class="label"><span class="pill">1%≤</span> Random: 1 SOL / 1 BTC / 1 ETH</span><span class="fine"></span></div>
       </div>
       <p class="fine" style="margin-top:8px;">* UI shows promo odds; real odds are server-side and may adjust dynamically.</p>
     </section>
@@ -223,7 +231,7 @@
 
     /* ===== Activity & chain ===== */
     const ACTIVITY_ID = 'mid-autumn-2025';
-    const { PublicKey, Transaction, TransactionInstruction, Connection } = window.solanaWeb3;
+    const { PublicKey, Transaction, TransactionInstruction, Connection, clusterApiUrl } = window.solanaWeb3;
     const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
     const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
@@ -243,7 +251,7 @@
     const app = initializeApp(window.FIREBASE_CONFIG);
     const db  = getFirestore(app);
 
-    /* ===== holder-check ===== */
+    /* ===== holder-check （可缺省，已带fallback）===== */
     let loadRemoteConfig, resolveIsHolder, allowedChances;
     try {
       const m = await import('./holder-check.js');
@@ -279,7 +287,8 @@
     const isSolanaAddress = (addr)=> typeof addr==='string' && !addr.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
     const isSolanaCapableProvider = (p)=> !!p && (typeof p.signAndSendTransaction==='function' || typeof p.signTransaction==='function');
 
-    function allowedChancesLocal(isHolder,cfg){ return allowedChances(isHolder,cfg); }
+    const allowedChancesLocal = (isHolder,cfg)=> allowedChances(isHolder,cfg);
+
     async function ensureParticipant(address,isHolder,cfg){
       try{
         const ref = partDoc(address);
@@ -324,7 +333,7 @@
       const { freeLeft } = await computeRemaining(walletAddress,isHolder,cfg);
       els.remaining.textContent = String(freeLeft);
 
-      // ✅ 免费用尽后仍允许点击，进入付费抽
+      // 免费用尽后仍允许点击，进入付费抽
       els.drawBtn.disabled = false;
       els.drawBtn.title = freeLeft<=0
         ? `No free chances · Paid draw costs ${PRICE_UI.toLocaleString()} tokens`
@@ -343,7 +352,7 @@
       return tips.join(' ');
     }
 
-    /* ===== 钱包检测 ===== */
+    /* ===== 钱包检测（多钱包 + MetaMask Snap）===== */
     function detectPhantom(){ return (window.solana?.isPhantom ? window.solana : (window.phantom?.solana?.isPhantom ? window.phantom.solana : null)); }
     function detectSolflare(){ return (window.solflare || null); }
     function detectBackpack(){ return (window.backpack?.solana?.isBackpack ? window.backpack.solana : null); }
@@ -507,7 +516,7 @@
       await updateUI(false, CONFIG_DEFAULT);
     });
 
-    /* ===== 后端配置加载（支持 /status 与 /config） ===== */
+    /* ===== 后端配置加载（支持覆盖变量） ===== */
     function pickFrontendRpc(url){
       if (!url) return 'https://solana.publicnode.com';
       return url;
@@ -527,7 +536,7 @@
           }
         }catch{}
 
-        // ② /config 兜底（有的后端是包在 config 里）
+        // ② /config 兜底
         try{
           const r=await fetch(`${API_BASE}/config`,{headers:{'Accept':'application/json'}, cache:'no-store'});
           if (r.ok){
@@ -535,13 +544,18 @@
             const c = j?.config || j;
             if (c?.mint) CHAIN.mints[0].address = c.mint;
             if (typeof c?.decimals === 'number') CHAIN.decimals = c.decimals;
-            if (typeof c?.mintDecimals === 'number') CHAIN.decimals = c.mintDecimals; // 兼容字段
+            if (typeof c?.mintDecimals === 'number') CHAIN.decimals = c.mintDecimals;
             if (c?.treasury) CHAIN.treasury = c.treasury;
             if (c?.rpc) CHAIN.rpcEndpoint = pickFrontendRpc(c.rpc);
             if (typeof c?.price === 'number') PRICE_UI = c.price;
-            if (typeof c?.drawCostUi === 'number') PRICE_UI = c.drawCostUi; // 兼容字段
+            if (typeof c?.drawCostUi === 'number') PRICE_UI = c.drawCostUi;
           }
         }catch{}
+
+        // ③ 手动覆盖（可选）
+        if (window.MINT_OVERRIDE) CHAIN.mints[0].address = String(window.MINT_OVERRIDE);
+        if (typeof window.DECIMALS_OVERRIDE === 'number') CHAIN.decimals = Number(window.DECIMALS_OVERRIDE);
+        if (window.TREASURY_OVERRIDE) CHAIN.treasury = String(window.TREASURY_OVERRIDE);
 
         // UI 提示
         if (!CHAIN.mints[0].address || !CHAIN.treasury){
@@ -576,7 +590,7 @@
       const seen=new Set(); return list.filter(u=>{const k=(u||'').trim(); if(!k||seen.has(k)) return false; seen.add(k); return true;});
     }
     function isApiKeyErr(err){ const s=String(err?.message||err||''); return /-32052|api key|forbidden|403/i.test(s); }
-    function withTimeout(p,ms=2500){ return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('rpc-timeout')),ms))]); }
+    function withTimeout(p,ms=3000){ return Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('rpc-timeout')),ms))]); }
 
     /* ===== SPL Transfer Helpers ===== */
     function u64LE(nBig){ const b = new Uint8Array(8); let x = BigInt(nBig); for (let i=0;i<8;i++){ b[i] = Number(x & 0xffn); x >>= 8n; } return b; }
@@ -594,13 +608,30 @@
       ];
       return new TransactionInstruction({ keys, programId: TOKEN_PROGRAM_ID, data });
     }
-    async function signAndSendViaWallet(tx){
-      const res = await currentProvider.signAndSendTransaction(tx);
-      return res?.signature || res;
+
+    async function confirmSigOnSomeRpc(sig, hintBlockhash = null, hintLastValid = null){
+      // 多 RPC 确认，降低 “tx_not_found”
+      const rpclist = buildRpcList(CHAIN.rpcEndpoint);
+      for (const endpoint of rpclist){
+        try{
+          const conn = new Connection(endpoint, CHAIN.commitment);
+          if (hintBlockhash && hintLastValid){
+            await withTimeout(conn.confirmTransaction({ signature: sig, blockhash: hintBlockhash, lastValidBlockHeight: hintLastValid }, CHAIN.commitment), 8000);
+          }else{
+            await withTimeout(conn.confirmTransaction(sig, CHAIN.commitment), 8000);
+          }
+          return true;
+        }catch(e){
+          if (isApiKeyErr(e)){ console.warn('[confirm] 403/key error, switch', endpoint); continue; }
+          console.warn('[confirm] try next rpc', endpoint, e?.message||e);
+          continue;
+        }
+      }
+      return false;
     }
+
     async function sendSplTransferChecked({ provider, fromAddress, toOwnerAddress, mintAddress, amountUi, decimals }){
       if(!provider) throw new Error('No Solana provider available');
-
       const fromOwner = new PublicKey(fromAddress);
       const toOwner   = new PublicKey(toOwnerAddress);
       const mintPk    = new PublicKey(mintAddress);
@@ -612,52 +643,57 @@
       const tx = new Transaction();
       tx.add(createTransferCheckedInstruction(fromATA, mintPk, toATA, fromOwner, amount, decimals));
 
-      // 尝试直接走钱包（部分钱包会自动补 blockhash）
+      // 先试钱包直接 signAndSend（部分钱包会自动补 blockhash）
       if (typeof provider.signAndSendTransaction === 'function'){
         try {
-          const sig = await signAndSendViaWallet(tx);
-          return String(sig);
+          const res = await provider.signAndSendTransaction(tx);
+          const sig = String(res?.signature || res);
+          // 尽最大努力确认
+          await confirmSigOnSomeRpc(sig);
+          return sig;
         } catch (e) {
           const msg = String(e?.message||e||'');
-          if (!/blockhash/i.test(msg) && !/recent/i.test(msg)) throw e;
+          if (!/blockhash|recent/i.test(msg)) throw e;
         }
       }
 
-      // 我们补 blockhash & feePayer，再次尝试
+      // 我们补 blockhash & feePayer 再次尝试
       const rpclist = buildRpcList(CHAIN.rpcEndpoint);
       let lastErr = null;
 
       for (const endpoint of rpclist) {
         try {
           const conn = new Connection(endpoint, CHAIN.commitment);
-          const { blockhash, lastValidBlockHeight } = await withTimeout(conn.getLatestBlockhash(CHAIN.commitment), 2500);
+          const { blockhash, lastValidBlockHeight } = await withTimeout(conn.getLatestBlockhash(CHAIN.commitment), 3000);
           tx.recentBlockhash = blockhash;
           tx.feePayer = fromOwner;
 
           let sig;
           if (typeof provider.signAndSendTransaction === 'function'){
             const res = await provider.signAndSendTransaction(tx);
-            sig = res?.signature || res;
+            sig = String(res?.signature || res);
+            await confirmSigOnSomeRpc(sig, blockhash, lastValidBlockHeight);
+            return sig;
           } else if (typeof provider.signTransaction === 'function'){
             const signed = await provider.signTransaction(tx);
             const raw = signed.serialize();
-            sig = await withTimeout(conn.sendRawTransaction(raw, { skipPreflight:false }), 4000);
-            await withTimeout(conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment), 6000);
+            sig = await withTimeout(conn.sendRawTransaction(raw, { skipPreflight:false }), 5000);
+            await withTimeout(conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, CHAIN.commitment), 8000);
+            return sig;
           } else {
             throw new Error('Wallet cannot send transaction; please use Phantom/Solflare/Backpack.');
           }
-          return String(sig);
         } catch (err) {
           lastErr = err;
           if (isApiKeyErr(err)) { console.warn('[send] RPC key/403, switch next:', endpoint); continue; }
-          console.warn('[send] RPC error, try next:', endpoint, err);
+          console.warn('[send] RPC error, try next:', endpoint, err?.message||err);
           continue;
         }
       }
       throw lastErr || new Error('all rpc failed');
     }
 
-    /* ===== DRAW（含扣款） ===== */
+    /* ===== DRAW（含扣款 & 确认） ===== */
     async function performDraw(){
       if(!walletAddress) return;
 
@@ -668,9 +704,6 @@
       const remInfo = await computeRemaining(walletAddress,isHolder,cfg);
       const freeLeft = remInfo.freeLeft;
       const usedSoFar = remInfo.usedSoFar;
-      const allowedFree = remInfo.allowed;
-
-      // 关键：免费用尽后不 return，而是进入付费逻辑
       const needPay = freeLeft <= 0;
 
       if (needPay){
@@ -680,7 +713,7 @@
           return;
         }
         if (!CHAIN.mints?.[0]?.address || !CHAIN.treasury){
-          els.result.textContent='Payment not configured. Please try again later.';
+          els.result.textContent='Payment not configured (missing mint/treasury). Please try again later.';
           console.warn('Missing mint/treasury from backend /config or /status');
           return;
         }
@@ -714,7 +747,8 @@
         if(!r.ok || !data?.ok) throw new Error(data?.error || `HTTP ${r.status}`);
 
         const prize = data.prize?.label || 'Prize';
-        els.result.textContent = `You got: ${prize} ✨`;
+        const tx    = data.payoutTx || null;
+        els.result.textContent = tx ? `You got: ${prize} ✨\nTx: ${tx}` : `You got: ${prize} ✨`;
 
         // 使用计数：免费或付费都 +1
         const usedNow = usedSoFar + 1;
@@ -722,11 +756,18 @@
         await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
       }catch(e){
         console.error('draw error:', e);
-        els.result.textContent = `Draw failed: ${e?.message || e}`;
+        // 更友好的错误文案
+        const msg = String(e?.message||e||'');
+        if (/payment_invalid:tx_not_found/i.test(msg)){
+          els.result.textContent = 'Draw failed: payment sig not found on chain yet. Please try again in a moment (network lag).';
+        } else {
+          els.result.textContent = `Draw failed: ${msg}`;
+        }
       }finally{
         const cfg2 = await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
         const isHolder2 = isSol ? await safeResolveIsHolder({ db, address: walletAddress, chainConfig: CHAIN, config: cfg2 }) : false;
         await updateUI(isHolder2, cfg2);
+        els.drawBtn.disabled=false;
       }
     }
 
@@ -786,6 +827,7 @@
   </script>
 </body>
 </html>
+
 
 
 
