@@ -123,7 +123,6 @@
         <div class="stat"><span>Remaining free (this wallet)</span><span id="remaining">–</span></div>
         <div class="draw-actions">
           <button id="drawBtn" class="btn" disabled title="Disabled until wallet connects">Draw Now</button>
-          <button id="resetBtn" class="btn" title="Local cache only">Reset (local)</button>
         </div>
         <div id="result" class="result">Result will appear here ✨</div>
         <p class="note" id="holderNote">Token TBA — holder check runs via whitelist until the SPL mint is live.</p>
@@ -209,7 +208,6 @@
       eligibility: document.getElementById('eligibility'),
       remaining: document.getElementById('remaining'),
       drawBtn: document.getElementById('drawBtn'),
-      resetBtn: document.getElementById('resetBtn'),
       result: document.getElementById('result'),
       glowGlobal: document.getElementById('moonglowGlobalCounter'),
       glowError: document.getElementById('moonglowError'),
@@ -718,9 +716,7 @@
         const prize = data.prize?.label || 'Prize';
         els.result.textContent = `You got: ${prize} ✨`;
 
-        // 计算这次“使用次数”应如何增加：
-        // - 如果本次是免费抽：usedNow = usedSoFar + 1
-        // - 如果本次是付费抽：免费次已用尽，但为了不再阻止下一次付费抽，我们也把 used 加 1（只要后端按 paySig 记账即可）
+        // 使用计数：免费或付费都 +1
         const usedNow = usedSoFar + 1;
         writeUsedLocal(walletAddress, usedNow);
         await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
@@ -734,17 +730,7 @@
       }
     }
 
-    async function resetLocal(){
-      if(walletAddress){
-        writeUsedLocal(walletAddress,0);
-        els.result.textContent='Local reset.';
-        const cfg=await loadRemoteConfig(db,{defaults:CONFIG_DEFAULT});
-        const isHolder=isSolanaAddress(walletAddress)?await safeResolveIsHolder({db,address:walletAddress,chainConfig:CHAIN,config:cfg}):false;
-        await updateUI(isHolder,cfg);
-      }
-    }
     els.drawBtn.addEventListener('click', performDraw);
-    els.resetBtn.addEventListener('click', resetLocal);
 
     /* ===== MOONGlow ===== */
     const glowRef = doc(db, 'stats', 'moonglow');
