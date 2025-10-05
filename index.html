@@ -306,17 +306,18 @@
     }
 
     async function computeRemaining(address,isHolder,cfg){
-      try{
-        const usedFS=await readUsedFS(address);
-        const usedLocal=readUsedLocal(address);
-        const used=Math.max(usedFS,usedLocal);
-        if (used>usedFS) await writeUsedFS(address,used,null,isHolder,cfg);
-        const allowed = allowedChancesLocal(isHolder,cfg);
-        const rem = Math.max(0, allowed - used);
-        console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
-        return { freeLeft: rem, usedSoFar: used, allowed };
-      }catch(e){ console.warn('computeRemaining failed:', e); return { freeLeft:0, usedSoFar:0, allowed:0 }; }
-    }
+  try{
+    const used = await readUsedFS(address);  // ✅ 只读 Firestore
+    const allowed = allowedChancesLocal(isHolder,cfg);
+    const rem = Math.max(0, allowed - used);
+    console.log('[draw] allowed=%s used=%s rem=%s', allowed, used, rem);
+    return { freeLeft: rem, usedSoFar: used, allowed };
+  }catch(e){ 
+    console.warn('computeRemaining failed:', e); 
+    return { freeLeft:0, usedSoFar:0, allowed:0 }; 
+  }
+}
+
 
     async function updateUI(isHolder=false,cfg=CONFIG_DEFAULT){
       els.walletLabel.textContent = walletAddress ? `${short(walletAddress)}${walletType?' · '+walletType:''}` : 'Not connected';
@@ -752,7 +753,6 @@
 
         // 使用计数：免费或付费都 +1
         const usedNow = usedSoFar + 1;
-        writeUsedLocal(walletAddress, usedNow);
         await writeUsedFS(walletAddress, usedNow, prize, isHolder, cfg);
       }catch(e){
         console.error('draw error:', e);
@@ -827,6 +827,7 @@
   </script>
 </body>
 </html>
+
 
 
 
